@@ -3,4 +3,11 @@ import { FMConfig } from "./types/fmconfig-types.js";
 
 export default S3FileManager;
 export { FMConfig };
-export { ListFilesOptions } from "./types/input-types.js";
+export type { ListFilesOptions } from "./types/input-types.js";
+
+export const createFileManager = (config: FMConfig) => {
+    const fm = new S3FileManager(config);
+    return {
+        listFiles: fm.listFiles.bind(fm),
+    };
+};
