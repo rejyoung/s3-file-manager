@@ -1,7 +1,11 @@
-import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+import {
+    HeadObjectCommand,
+    ListObjectsV2Command,
+    S3Client,
+} from "@aws-sdk/client-s3";
 import { FMConfig, Logger, WithSpanFn } from "./types/fmconfig-types.js";
 import { isValidLogger } from "./utils/isValidLogger.js";
-import { ListFilesOptions } from "./types/input-types.js";
+import { ConfirmFilesOptions, ListFilesOptions } from "./types/input-types.js";
 
 export class S3FileManager {
     private bucketName: string;
@@ -9,6 +13,7 @@ export class S3FileManager {
     private logger: Logger;
     private withSpan: WithSpanFn;
     private maxAttempts: number;
+    private attemptNumString: string;
 
     constructor(config: FMConfig) {
         this.bucketName = config.bucketName;
@@ -28,6 +33,9 @@ export class S3FileManager {
             config.withSpan ?? (async (_n, _m, work) => await work());
 
         this.maxAttempts = config.maxAttempts ?? 3;
+        this.attemptNumString = `${this.maxAttempts} attempt${
+            this.maxAttempts > 1 ? "s" : ""
+        }`;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -80,13 +88,10 @@ export class S3FileManager {
             } catch (error) {
                 if (attempt === this.maxAttempts) {
                     throw new Error(
-                        `Could not fetch list of files after ${attempt} attempt${
-                            this.maxAttempts > 1 ? "s" : ""
-                        }: ${
-                            error instanceof Error
-                                ? error.message
-                                : String(error)
-                        }`
+                        `Could not fetch list of files after ${
+                            this.attemptNumString
+                        }: ${this.errorString(error)}`,
+                        { cause: error }
                     );
                 }
 
@@ -95,5 +100,79 @@ export class S3FileManager {
                 );
             }
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ✅ CONFIRM FILE EXISTENCE
+    // Verifies the presence of specified files in the S3 bucket using HeadObject
+    // ════════════════════════════════════════════════════════════════
+    public async confirmFilesExist(
+        options: ConfirmFilesOptions
+    ): Promise<{ allExist: boolean; missingFiles: string[] }> {
+        const { prefix, filenames, spanOptions = {} } = options;
+
+        const missingFiles: string[] = [];
+
+        await Promise.all(
+            filenames.map(async (filename) => {
+                const {
+                    name: spanName = "S3FileManager.confirmFilesExist",
+                    attributes: spanAttributes = {
+                        bucket: this.bucketName,
+                        filename: `${prefix ?? ""}${filename}`,
+                    },
+                } = spanOptions;
+
+                let attempt = 0;
+                let success = false;
+                while (!success) {
+                    try {
+                        attempt++;
+                        const command = new HeadObjectCommand({
+                            Bucket: this.bucketName,
+                            Key: `${prefix ?? ""}${filename}`,
+                        });
+                        await this.withSpan(
+                            spanName,
+                            spanAttributes,
+                            async () => await this.s3.send(command)
+                        );
+                        success = true;
+                    } catch (error: any) {
+                        if (
+                            error.name === "NotFound" ||
+                            error.$metadata?.httpStatusCode === 404
+                        ) {
+                            missingFiles.push(filename);
+                            success = true;
+                        } else {
+                            if (attempt === this.maxAttempts) {
+                                throw new Error(
+                                    `Attempt to verify the existence of file ${filename} failed after ${
+                                        this.attemptNumString
+                                    } ${this.errorString(error)}`,
+                                    { cause: error }
+                                );
+                            }
+                            this.logger.warn(
+                                `Attempt ${attempt} to verify the existence of file ${filename} failed: ${this.errorString(
+                                    error
+                                )}`
+                            );
+                            this.logger.warn("Retrying...");
+                        }
+                    }
+                }
+            })
+        );
+
+        return {
+            allExist: missingFiles.length === 0,
+            missingFiles,
+        };
+    }
+
+    private errorString(err: any) {
+        return err instanceof Error ? err.message : String(err);
     }
 }

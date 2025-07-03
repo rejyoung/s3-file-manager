@@ -5,6 +5,12 @@ export interface ListFilesOptions {
     spanOptions?: SpanOptions;
 }
 
+export interface ConfirmFilesOptions {
+    prefix?: string;
+    filenames: string[];
+    spanOptions?: SpanOptions;
+}
+
 export interface SpanOptions {
     name?: string;
     attributes?: Record<string, any>;
