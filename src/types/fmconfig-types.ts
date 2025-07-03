@@ -8,7 +8,7 @@ export interface FMConfig {
     forcePathStyle?: boolean;
     maxAttempts?: number;
     logger?: Logger;
-    tracer?: WithSpanFn;
+    withSpan?: WithSpanFn;
 }
 
 // Optional custom logging plugin

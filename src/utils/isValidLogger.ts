@@ -2,7 +2,7 @@
  * Type guard to validate a logger implements the Logger interface.
  */
 
-import { Logger } from "../types/fmconfig-types";
+import { Logger } from "../types/fmconfig-types.js";
 
 export const isValidLogger = (obj: any): obj is Logger => {
     if (
