@@ -31,12 +31,14 @@
     "type": "module",
     "devDependencies": {
         "@types/express": "^5.0.3",
+        "@types/mime-types": "^3.0.1",
         "@types/node": "^24.0.10",
         "ts-node": "^10.9.2",
         "typescript": "^5.8.3"
     },
     "dependencies": {
         "@aws-sdk/client-s3": "^3.842.0",
-        "aws-sdk": "^2.1692.0"
+        "aws-sdk": "^2.1692.0",
+        "mime-types": "^3.0.1"
     }
 }
