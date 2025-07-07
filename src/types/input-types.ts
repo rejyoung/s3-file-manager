@@ -45,3 +45,7 @@ export interface FileStreamOptions {
     timeoutMS?: number;
     spanOptions?: SpanOptions;
 }
+
+export interface DeleteFileOptions {
+    spanOptions?: SpanOptions;
+}
