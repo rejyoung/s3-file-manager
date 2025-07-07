@@ -16,7 +16,10 @@ export class S3FileManager {
 
     constructor(config: FMConfig) {
         this.sharedContext = new S3FMContext(config);
-        this.uploads = new UploadManager(this.sharedContext);
+        this.uploads = new UploadManager(
+            this.sharedContext,
+            config.maxUploadConcurrency
+        );
         this.services = new FileService(this.sharedContext);
     }
 

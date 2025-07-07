@@ -24,6 +24,11 @@ export interface FilePayload {
     content: string | Buffer | Uint8Array | Blob | Readable | ReadableStream;
 }
 
+export interface BatchedFilePayload extends FilePayload {
+    contentType?: string;
+    sizeHint?: number;
+}
+
 export type Stream = Blob | Readable | ReadableStream;
 
 export interface FileUploadOptions {
@@ -32,3 +37,6 @@ export interface FileUploadOptions {
     sizeHint?: number;
     spanOptions?: SpanOptions;
 }
+
+export interface FileBatchUploadOptions
+    extends Omit<FileUploadOptions, "sizeHint"> {}

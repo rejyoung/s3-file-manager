@@ -9,6 +9,7 @@ import {
 import { Readable } from "stream";
 import { S3FMContext } from "./context.js";
 import {
+    BatchedFilePayload,
     FilePayload,
     FileUploadOptions,
     Stream,
@@ -18,12 +19,17 @@ import { wait } from "../utils/wait.js";
 import { backoffDelay } from "../utils/wait.js";
 import { isStreamType, StreamType } from "../utils/type-guards.js";
 import { lookup as mimeLookup } from "mime-types";
+import Bottleneck from "bottleneck";
 
 export class UploadManager {
-    private shared: S3FMContext;
+    private ctx: S3FMContext;
+    private maxConcurrent: number;
+    private limiter: Bottleneck;
 
-    constructor(context: S3FMContext) {
-        this.shared = context;
+    constructor(context: S3FMContext, maxUploadConcurrency?: number) {
+        this.ctx = context;
+        this.maxConcurrent = maxUploadConcurrency ?? 4;
+        this.limiter = new Bottleneck({ maxConcurrent: this.maxConcurrent });
     }
     // ════════════════════════════════════════════════════════════════
     // 🔼 UPLOAD FILE
@@ -35,7 +41,17 @@ export class UploadManager {
         options: FileUploadOptions
     ): Promise<void> {
         const { content } = file;
-        try {
+        const { spanOptions = {}, prefix } = options;
+
+        const {
+            name: spanName = "S3FileManager.uploadFile",
+            attributes: spanAttributes = {
+                bucket: this.ctx.bucketName,
+                filename: `${prefix ?? ""}${file.name}`,
+            },
+        } = spanOptions;
+
+        await this.ctx.withSpan(spanName, spanAttributes, async () => {
             let sizeInBytes: number | undefined;
             let type: UploadContentType;
 
@@ -60,9 +76,9 @@ export class UploadManager {
                 type = "ReadableStream";
             }
 
-            this.shared.verboseLog(
+            this.ctx.verboseLog(
                 `Uploading ${file.name} (${sizeInBytes} bytes) using ${
-                    sizeInBytes && sizeInBytes > this.shared.multipartThreshold
+                    sizeInBytes && sizeInBytes > this.ctx.multipartThreshold
                         ? "multipart"
                         : "simple"
                 } upload`
@@ -72,18 +88,80 @@ export class UploadManager {
                 options.contentType ??
                 (mimeLookup(file.name) || "application/octet-stream");
 
-            if (sizeInBytes && sizeInBytes > this.shared.multipartThreshold) {
+            if (
+                sizeInBytes === undefined ||
+                sizeInBytes > this.ctx.multipartThreshold
+            ) {
                 await this.multipartUpload(
                     file,
-                    options,
                     type,
                     mimeType,
-                    sizeInBytes
+                    sizeInBytes,
+                    options.prefix
                 );
             } else {
-                await this.simpleUpload(file, options, mimeType);
+                await this.simpleUpload(file, mimeType, options.prefix);
             }
-        } catch (error) {}
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // 📦 UPLOAD FILE BATCH
+    // Iterates through arrays of files and uploads them with predefined concurrency limits
+    // ════════════════════════════════════════════════════════════════
+
+    public async uploadFileBatch(
+        files: BatchedFilePayload[],
+        options: FileUploadOptions
+    ): Promise<string[]> {
+        const { spanOptions = {}, prefix } = options;
+
+        const {
+            name: spanName = "S3FileManager.uploadFileBatch",
+            attributes: spanAttributes = {
+                bucket: this.ctx.bucketName,
+            },
+        } = spanOptions;
+
+        let skippedFiles: string[] = [];
+
+        await this.ctx.withSpan(spanName, spanAttributes, async () => {
+            await Promise.all(
+                files.map(async (fileForUpload) => {
+                    const file: FilePayload = {
+                        name: fileForUpload.name,
+                        content: fileForUpload.content,
+                    };
+                    const uploadOptions: FileUploadOptions = {
+                        prefix,
+                        contentType:
+                            fileForUpload.contentType ?? options.contentType,
+                        sizeHint: fileForUpload.sizeHint,
+                    };
+                    try {
+                        await this.uploadFile(file, uploadOptions);
+                    } catch (error) {
+                        skippedFiles.push(fileForUpload.name);
+                        this.ctx.verboseLog(String(error), "warn");
+                        this.ctx.verboseLog("Skipping file...", "warn");
+                    }
+                })
+            );
+        });
+
+        if (skippedFiles.length > 0) {
+            this.ctx.logger.warn(
+                `File batch upload finished, but the following ${
+                    skippedFiles.length
+                } file(s) failed to upload: ${skippedFiles.join(", ")}`
+            );
+        } else {
+            this.ctx.logger.info(
+                "File batch upload complete. All files successfully uploaded."
+            );
+        }
+
+        return skippedFiles;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -93,48 +171,48 @@ export class UploadManager {
 
     private async simpleUpload(
         file: FilePayload,
-        options: FileUploadOptions,
-        mimeType: string
+        mimeType: string,
+        prefix?: string
     ): Promise<void> {
-        const { prefix, spanOptions = {} } = options;
-        const {
-            name: spanName = "S3FileManager.simpleUpload",
-            attributes: spanAttributes = {
-                bucket: this.shared.bucketName,
-                filename: `${prefix ?? ""}${file.name}`,
-            },
-        } = spanOptions;
-
         const key = `${prefix ?? ""}${file.name}`;
         let attempt = 0;
 
-        await this.shared.withSpan(spanName, spanAttributes, async () => {
-            while (true) {
-                try {
-                    attempt++;
-                    const command = new PutObjectCommand({
-                        Bucket: this.shared.bucketName,
-                        Key: key,
-                        Body: file.content,
-                        ContentType: mimeType,
-                    });
-                    await this.shared.s3.send(command);
-                    this.shared.verboseLog(
-                        `Successfully uploaded ${file.name}`
-                    );
-                    return;
-                } catch (error) {
-                    this.shared.handleRetryErrorLogging(
-                        attempt,
-                        `to upload ${file.name}`,
-                        error
-                    );
+        await this.ctx.withSpan(
+            "S3FileManager.uploadFile > simpleUpload",
+            {
+                bucket: this.ctx.bucketName,
+                filename: `${prefix ?? ""}${file.name}`,
+            },
+            async () => {
+                while (true) {
+                    try {
+                        attempt++;
+                        const command = new PutObjectCommand({
+                            Bucket: this.ctx.bucketName,
+                            Key: key,
+                            Body: file.content,
+                            ContentType: mimeType,
+                        });
+                        await this.limiter.schedule(() =>
+                            this.ctx.s3.send(command)
+                        );
+                        this.ctx.verboseLog(
+                            `Successfully uploaded ${file.name}`
+                        );
+                        return;
+                    } catch (error) {
+                        this.ctx.handleRetryErrorLogging(
+                            attempt,
+                            `to upload ${file.name}`,
+                            error
+                        );
 
-                    // Wait before next attempt
-                    await wait(backoffDelay(attempt));
+                        // Wait before next attempt
+                        await wait(backoffDelay(attempt));
+                    }
                 }
             }
-        });
+        );
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -144,29 +222,19 @@ export class UploadManager {
 
     private async multipartUpload(
         file: FilePayload,
-        options: FileUploadOptions,
         type: UploadContentType,
         mimeType: string,
-        size: number
+        size?: number,
+        prefix?: string
     ): Promise<boolean> {
-        const { prefix, spanOptions = {} } = options;
-
-        const {
-            name: spanName = "S3FileManager.multipartUpload",
-            attributes: spanAttributes = {
-                bucket: this.shared.bucketName,
-                filename: `${prefix ?? ""}${file.name}`,
-            },
-        } = spanOptions;
-
-        let fileChunks: AsyncIterable<Buffer> | Array<Buffer>;
+        let fileChunks: AsyncIterable<Buffer> | Buffer[];
         try {
             if (isStreamType(type) && (!size || size > 200 * 1024 * 1024)) {
                 fileChunks = await this.streamToIterable(
                     file.content as Stream,
                     type
                 );
-                this.shared.verboseLog(
+                this.ctx.verboseLog(
                     "Successfully prepared stream for multipart upload."
                 );
             } else {
@@ -184,22 +252,25 @@ export class UploadManager {
                     buffer = file.content as Buffer;
                 }
                 fileChunks = this.bufferToChunks(buffer);
-                this.shared.verboseLog(
+                this.ctx.verboseLog(
                     "Successfully constructed Buffer for multipart upload."
                 );
             }
         } catch (error) {
             throw new Error(
-                `Something went wrong while attempting to prepare content for multipart upload: ${this.shared.errorString(
+                `Something went wrong while attempting to prepare content for multipart upload: ${this.ctx.errorString(
                     error
                 )}`,
                 { cause: error }
             );
         }
 
-        const response = await this.shared.withSpan(
-            spanName,
-            spanAttributes,
+        const response = await this.ctx.withSpan(
+            "S3FileManager.uploadFile > multipartUpload",
+            {
+                bucket: this.ctx.bucketName,
+                filename: `${prefix ?? ""}${file.name}`,
+            },
             async () => {
                 let uploadId: string | undefined;
                 const filename = `${prefix ?? ""}${file.name}`;
@@ -208,9 +279,9 @@ export class UploadManager {
                 while (true) {
                     attempt++;
                     try {
-                        const createResponse = await this.shared.s3.send(
+                        const createResponse = await this.ctx.s3.send(
                             new CreateMultipartUploadCommand({
-                                Bucket: this.shared.bucketName,
+                                Bucket: this.ctx.bucketName,
                                 Key: filename,
                                 ContentType: mimeType,
                             })
@@ -240,28 +311,28 @@ export class UploadManager {
                             partNumber++;
                         }
 
-                        await this.shared.s3.send(
+                        await this.ctx.s3.send(
                             new CompleteMultipartUploadCommand({
-                                Bucket: this.shared.bucketName,
+                                Bucket: this.ctx.bucketName,
                                 Key: filename,
                                 UploadId: uploadId,
                                 MultipartUpload: { Parts: parts },
                             })
                         );
-                        this.shared.verboseLog(
+                        this.ctx.verboseLog(
                             `File ${filename} successfully uploaded to S3 bucket`
                         );
                         return true;
                     } catch (error) {
-                        await this.shared.s3.send(
+                        await this.ctx.s3.send(
                             new AbortMultipartUploadCommand({
-                                Bucket: this.shared.bucketName,
+                                Bucket: this.ctx.bucketName,
                                 Key: filename,
                                 UploadId: uploadId,
                             })
                         );
 
-                        this.shared.handleRetryErrorLogging(
+                        this.ctx.handleRetryErrorLogging(
                             attempt,
                             `to upload ${filename}`,
                             error
@@ -286,18 +357,25 @@ export class UploadManager {
         while (true) {
             try {
                 attempt++;
-                const uploadPartResponse = await this.shared.s3.send(
-                    new UploadPartCommand({
-                        Bucket: this.shared.bucketName,
-                        Key: filename,
-                        PartNumber: partNumber,
-                        UploadId: uploadId,
-                        Body: chunk,
-                    })
+                const uploadPartResponse = await this.ctx.withSpan(
+                    "S3FileManager.uploadFile > multipartUpload > uploadPartWithRetry",
+                    { filename, uploadId, partNumber },
+                    async () =>
+                        await this.limiter.schedule(() =>
+                            this.ctx.s3.send(
+                                new UploadPartCommand({
+                                    Bucket: this.ctx.bucketName,
+                                    Key: filename,
+                                    PartNumber: partNumber,
+                                    UploadId: uploadId,
+                                    Body: chunk,
+                                })
+                            )
+                        )
                 );
                 return uploadPartResponse.ETag!;
             } catch (error) {
-                this.shared.handleRetryErrorLogging(
+                this.ctx.handleRetryErrorLogging(
                     attempt,
                     `to upload part ${partNumber} of ${filename}`,
                     error
@@ -347,12 +425,12 @@ export class UploadManager {
                     buffer,
                     Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
                 ]);
-                while (buffer.length >= this.shared.multipartThreshold) {
-                    yield buffer.subarray(0, this.shared.multipartThreshold);
-                    buffer = buffer.subarray(this.shared.multipartThreshold);
+                while (buffer.length >= this.ctx.multipartThreshold) {
+                    yield buffer.subarray(0, this.ctx.multipartThreshold);
+                    buffer = buffer.subarray(this.ctx.multipartThreshold);
                 }
-                if (buffer.length) yield buffer;
             }
+            if (buffer.length) yield buffer;
         } else {
             const preparedStream =
                 type === "Blob"
@@ -363,26 +441,26 @@ export class UploadManager {
                 const { done, value } = await reader.read();
                 if (done) break;
                 buffer = Buffer.concat([buffer, Buffer.from(value)]);
-                while (buffer.length >= this.shared.multipartThreshold) {
-                    yield buffer.subarray(0, this.shared.multipartThreshold);
-                    buffer = buffer.subarray(this.shared.multipartThreshold);
+                while (buffer.length >= this.ctx.multipartThreshold) {
+                    yield buffer.subarray(0, this.ctx.multipartThreshold);
+                    buffer = buffer.subarray(this.ctx.multipartThreshold);
                 }
             }
             if (buffer.length) yield buffer;
         }
     }
 
-    private bufferToChunks(buffer: Buffer): Array<Buffer> {
-        const bufferChunks: Array<Buffer> = [];
+    private bufferToChunks(buffer: Buffer): Buffer[] {
+        const bufferChunks: Buffer[] = [];
         const totalFileSize = buffer.length;
         const numberOfParts = Math.ceil(
-            totalFileSize / this.shared.multipartThreshold
+            totalFileSize / this.ctx.multipartThreshold
         );
 
         for (let part = 1; part <= numberOfParts; part++) {
-            const start = (part - 1) * this.shared.multipartThreshold;
+            const start = (part - 1) * this.ctx.multipartThreshold;
             const end = Math.min(
-                start + this.shared.multipartThreshold,
+                start + this.ctx.multipartThreshold,
                 totalFileSize
             );
             const chunk = buffer.subarray(start, end);

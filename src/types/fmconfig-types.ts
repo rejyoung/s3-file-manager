@@ -11,6 +11,7 @@ export interface FMConfig {
     logger?: Logger;
     verboseLogging?: boolean;
     withSpan?: WithSpanFn;
+    maxUploadConcurrency?: number;
 }
 
 // Optional custom logging plugin
