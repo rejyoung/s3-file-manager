@@ -40,3 +40,8 @@ export interface FileUploadOptions {
 
 export interface FileBatchUploadOptions
     extends Omit<FileUploadOptions, "sizeHint"> {}
+
+export interface FileStreamOptions {
+    timeoutMS?: number;
+    spanOptions?: SpanOptions;
+}
