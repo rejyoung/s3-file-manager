@@ -1,6 +1,9 @@
 import { S3Client } from "@aws-sdk/client-s3";
 import { FMConfig, Logger, WithSpanFn } from "../types/fmconfig-types.js";
 import { isValidLogger } from "../utils/isValidLogger.js";
+import { Readable } from "stream";
+import { StreamType } from "../utils/type-guards.js";
+import { Stream } from "../types/input-types.js";
 
 const MAX_ATTEMPTS_DEFAULT = 3;
 const MULTIPART_THRESHOLD_DEFAULT = 10 * 1024 * 1024;
@@ -97,6 +100,32 @@ export class S3FMContext {
                 default:
                     this.logger.info(message);
             }
+        }
+    }
+
+    public async streamToBuffer(
+        stream: Stream,
+        type: StreamType
+    ): Promise<Buffer> {
+        const chunks: Buffer[] = [];
+        if (type === "Readable") {
+            for await (const chunk of stream as Readable) {
+                chunks.push(
+                    Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+                );
+            }
+            return Buffer.concat(chunks);
+        } else if (type === "ReadableStream") {
+            const reader = (stream as ReadableStream).getReader();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(Buffer.from(value));
+            }
+            return Buffer.concat(chunks);
+        } else {
+            const arrayBuffer = await (stream as Blob).arrayBuffer();
+            return Buffer.from(arrayBuffer);
         }
     }
 }

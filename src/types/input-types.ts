@@ -1,22 +1,23 @@
 import { Readable } from "stream";
 import { Buffer } from "buffer";
 
-export interface ListFilesOptions {
-    prefix?: string;
-    filterFn?: (filename: string) => boolean;
-    compareFn?: (a: string, b: string) => number;
-    spanOptions?: SpanOptions;
-}
-
-export interface ConfirmFilesOptions {
-    prefix?: string;
-    filenames: string[];
-    spanOptions?: SpanOptions;
-}
-
 export interface SpanOptions {
     name?: string;
     attributes?: Record<string, any>;
+}
+
+export interface BasicOptions {
+    spanOptions?: SpanOptions;
+}
+
+export interface ListFilesOptions extends BasicOptions {
+    prefix?: string;
+    filterFn?: (filename: string) => boolean;
+    compareFn?: (a: string, b: string) => number;
+}
+
+export interface ConfirmFilesOptions extends BasicOptions {
+    prefix?: string;
 }
 
 export interface FilePayload {
@@ -31,21 +32,18 @@ export interface BatchedFilePayload extends FilePayload {
 
 export type Stream = Blob | Readable | ReadableStream;
 
-export interface FileUploadOptions {
+export interface FileUploadOptions extends BasicOptions {
     prefix?: string;
     contentType?: string; // mime-type
     sizeHint?: number;
-    spanOptions?: SpanOptions;
 }
 
 export interface FileBatchUploadOptions
     extends Omit<FileUploadOptions, "sizeHint"> {}
 
-export interface FileStreamOptions {
+export interface FileStreamOptions extends BasicOptions {
     timeoutMS?: number;
-    spanOptions?: SpanOptions;
 }
 
-export interface DeleteFileOptions {
-    spanOptions?: SpanOptions;
-}
+export interface DeleteFileOptions extends BasicOptions {}
+export interface LoadFileOptions extends BasicOptions {}

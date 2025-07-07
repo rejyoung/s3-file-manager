@@ -95,9 +95,10 @@ export class FileService {
     // Verifies the presence of specified files in the S3 bucket using HeadObject
     // ════════════════════════════════════════════════════════════════
     public async confirmFilesExist(
-        options: ConfirmFilesOptions
+        filenames: string[],
+        options: ConfirmFilesOptions = {}
     ): Promise<{ allExist: boolean; missingFiles: string[] }> {
-        const { prefix, filenames, spanOptions = {} } = options;
+        const { prefix, spanOptions = {} } = options;
 
         const missingFiles: string[] = [];
 

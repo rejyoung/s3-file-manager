@@ -38,7 +38,7 @@ export class UploadManager {
 
     public async uploadFile(
         file: FilePayload,
-        options: FileUploadOptions
+        options: FileUploadOptions = {}
     ): Promise<void> {
         const { content } = file;
         const { spanOptions = {}, prefix } = options;
@@ -112,7 +112,7 @@ export class UploadManager {
 
     public async uploadFileBatch(
         files: BatchedFilePayload[],
-        options: FileUploadOptions
+        options: FileUploadOptions = {}
     ): Promise<string[]> {
         const { spanOptions = {}, prefix } = options;
 
@@ -240,7 +240,7 @@ export class UploadManager {
             } else {
                 let buffer: Buffer;
                 if (isStreamType(type)) {
-                    buffer = await this.streamToBuffer(
+                    buffer = await this.ctx.streamToBuffer(
                         file.content as Stream,
                         type
                     );
@@ -388,31 +388,6 @@ export class UploadManager {
     }
 
     // --- 🔄 Stream to Buffer Conversion-----------------------------------------
-    private async streamToBuffer(
-        stream: Stream,
-        type: StreamType
-    ): Promise<Buffer> {
-        const chunks: Buffer[] = [];
-        if (type === "Readable") {
-            for await (const chunk of stream as Readable) {
-                chunks.push(
-                    Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-                );
-            }
-            return Buffer.concat(chunks);
-        } else if (type === "ReadableStream") {
-            const reader = (stream as ReadableStream).getReader();
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                chunks.push(Buffer.from(value));
-            }
-            return Buffer.concat(chunks);
-        } else {
-            const arrayBuffer = await (stream as Blob).arrayBuffer();
-            return Buffer.from(arrayBuffer);
-        }
-    }
 
     private async *streamToIterable(
         stream: Stream,
