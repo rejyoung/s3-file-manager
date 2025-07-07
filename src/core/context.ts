@@ -82,9 +82,21 @@ export class S3FMContext {
         this.logRetryWarning(attempt, action, error);
     }
 
-    public verboseLog(message: string) {
+    public verboseLog(message: string, type?: "info" | "warn" | "error") {
         if (this.allowVerboseLogging) {
-            this.logger.info(message);
+            switch (type) {
+                case "info":
+                    this.logger.info(message);
+                    break;
+                case "warn":
+                    this.logger.warn(message);
+                    break;
+                case "error":
+                    this.logger.error(message);
+                    break;
+                default:
+                    this.logger.info(message);
+            }
         }
     }
 }
