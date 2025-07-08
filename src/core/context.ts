@@ -9,6 +9,12 @@ const MAX_ATTEMPTS_DEFAULT = 3;
 const MULTIPART_THRESHOLD_DEFAULT = 10 * 1024 * 1024;
 const MULTIPART_THRESHOLD_MIN = 5 * 1024 * 1024;
 
+/**
+ ╔════════════════════════════════════════════════════════════════╗
+ ║ ☁️ S3 CLIENT WRAPPER                                           ║
+ ║ Wraps the S3 client and exposes shared utilities and methods.  ║
+ ╚════════════════════════════════════════════════════════════════╝
+ */
 export class S3FMContext {
     public readonly bucketName: string;
     public readonly s3: S3Client;
@@ -55,10 +61,18 @@ export class S3FMContext {
     // General helper functions for internal use
     // ════════════════════════════════════════════════════════════════
 
+    // ════════════════════════════════════════════════════════════════
+    // 📊 WITH SPAN
+    // Wraps a function in a tracing span for observability
+    // ════════════════════════════════════════════════════════════════
     public errorString(err: any) {
         return err instanceof Error ? err.message : String(err);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 🔎 GET TRACER
+    // Returns the tracer instance for span creation
+    // ════════════════════════════════════════════════════════════════
     private logRetryWarning(attempt: number, action: string, error: any) {
         this.logger.warn(
             `Attempt ${attempt} of ${
@@ -68,6 +82,10 @@ export class S3FMContext {
         this.logger.warn("Retrying...");
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 📝 GET LOGGER
+    // Returns the logger instance for structured logging
+    // ════════════════════════════════════════════════════════════════
     public handleRetryErrorLogging(
         attempt: number,
         action: string,
@@ -85,6 +103,10 @@ export class S3FMContext {
         this.logRetryWarning(attempt, action, error);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 🗯 VERBOSE LOG
+    // Outputs a verbose-level log message if verbosity is enabled
+    // ════════════════════════════════════════════════════════════════
     public verboseLog(message: string, type?: "info" | "warn" | "error") {
         if (this.allowVerboseLogging) {
             switch (type) {
@@ -103,6 +125,10 @@ export class S3FMContext {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 🔁 STREAM TO BUFFER
+    // Converts a readable stream into a buffer
+    // ════════════════════════════════════════════════════════════════
     public async streamToBuffer(
         stream: Stream,
         type: StreamType

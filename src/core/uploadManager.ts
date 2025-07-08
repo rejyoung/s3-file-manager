@@ -21,6 +21,13 @@ import { isStreamType, StreamType } from "../utils/type-guards.js";
 import { lookup as mimeLookup } from "mime-types";
 import Bottleneck from "bottleneck";
 
+/**
+ ╔════════════════════════════════════════════════════════════════════════════════╗
+ ║ 📤 UPLOAD MANAGER                                                              ║
+ ║ Handles file uploads to S3, including direct uploads, multipart uploads, and   ║
+ ║ retry logic for reliability.                                                   ║
+ ╚════════════════════════════════════════════════════════════════════════════════╝
+ */
 export class UploadManager {
     private ctx: S3FMContext;
     private maxConcurrent: number;
@@ -347,6 +354,11 @@ export class UploadManager {
         return response;
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 🔁 UPLOAD PART WITH RETRY
+    // Uploads individual chunks of a multipart upload with retry logic
+    // ════════════════════════════════════════════════════════════════
+
     private async uploadPartWithRetry(
         filename: string,
         uploadId: string,
@@ -387,7 +399,10 @@ export class UploadManager {
         }
     }
 
-    // --- 🔄 Stream to Buffer Conversion-----------------------------------------
+    // ════════════════════════════════════════════════════════════════
+    // 🔄 STREAM TO ITERABLE
+    // Converts a readable stream into iterable buffer chunks
+    // ════════════════════════════════════════════════════════════════
 
     private async *streamToIterable(
         stream: Stream,
@@ -424,6 +439,11 @@ export class UploadManager {
             if (buffer.length) yield buffer;
         }
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // 📚 BUFFER TO CHUNKS
+    // Splits a Buffer into multipart-sized chunks
+    // ════════════════════════════════════════════════════════════════
 
     private bufferToChunks(buffer: Buffer): Buffer[] {
         const bufferChunks: Buffer[] = [];
