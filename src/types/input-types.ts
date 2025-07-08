@@ -1,5 +1,6 @@
 import { Readable } from "stream";
 import { Buffer } from "buffer";
+import { ListItemsOptionsInternal } from "./internal-types.js";
 
 export interface SpanOptions {
     name?: string;
@@ -10,11 +11,11 @@ export interface BasicOptions {
     spanOptions?: SpanOptions;
 }
 
-export interface ListFilesOptions extends BasicOptions {
-    prefix?: string;
-    filterFn?: (filename: string) => boolean;
-    compareFn?: (a: string, b: string) => number;
+export interface ListDirectoriesOptions
+    extends Omit<ListItemsOptionsInternal, "directoriesOnly" | "spanOptions"> {
+    spanOptions?: SpanOptions;
 }
+export interface ListFilesOptions extends ListDirectoriesOptions {}
 
 export interface ConfirmFilesOptions extends BasicOptions {
     prefix?: string;
@@ -45,5 +46,25 @@ export interface FileStreamOptions extends BasicOptions {
     timeoutMS?: number;
 }
 
-export interface DeleteFileOptions extends BasicOptions {}
 export interface LoadFileOptions extends BasicOptions {}
+export interface DownloadToDiskOptions extends BasicOptions {
+    outputFilename?: string;
+}
+
+export interface DownloadLinkOptions extends BasicOptions {
+    validDurationMinutes: number;
+}
+
+export interface DownloadAllOptions extends BasicOptions {
+    extensionOverride?: string;
+}
+
+export interface CopyFileOptions extends BasicOptions {
+    sourceBucketName?: string;
+}
+
+export interface MoveFileOptions extends CopyFileOptions {}
+
+export interface DeleteFileOptions extends CopyFileOptions {}
+
+export interface RenameFileOptions extends BasicOptions {}
