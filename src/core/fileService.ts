@@ -7,9 +7,6 @@ import {
 import { S3FMContext } from "./context.js";
 import { backoffDelay, wait } from "../utils/wait.js";
 import {
-    ConfirmFilesOptions,
-    CopyFileOptions,
-    DeleteFileOptions,
     ListDirectoriesOptions,
     ListFilesOptions,
     MoveFileOptions,

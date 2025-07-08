@@ -1,7 +1,14 @@
 // tests/uploadManager.test.ts
 import { Readable } from "stream";
-import Bottleneck from "bottleneck";
-
+import {
+    S3Client,
+    CreateMultipartUploadCommand,
+    UploadPartCommand,
+    CompleteMultipartUploadCommand,
+    PutObjectCommand,
+    AbortMultipartUploadCommand,
+} from "@aws-sdk/client-s3";
+import { mockClient } from "aws-sdk-client-mock";
 import { UploadManager } from "../src/core/uploadManager";
 import { S3FMContext } from "../src/core/context";
 import { FilePayload, FileUploadOptions } from "../src/types/input-types";
@@ -18,41 +25,27 @@ function makeStreamOfSize(n: number): Readable {
 describe("UploadManager", () => {
     let ctx: S3FMContext;
     let uploads: UploadManager;
-    let sendMock: jest.Mock;
+    const s3Mock = mockClient(S3Client);
 
     beforeEach(() => {
-        // stub out S3Client.send
-        sendMock = jest.fn((command) => {
-            const name = command.constructor.name;
-            if (name === "CreateMultipartUploadCommand") {
-                return Promise.resolve({ UploadId: "test-upload-id" });
-            }
-            if (name === "UploadPartCommand") {
-                return Promise.resolve({
-                    ETag: `"etag-${command.PartNumber}"`,
-                });
-            }
-            if (name === "CompleteMultipartUploadCommand") {
-                return Promise.resolve({});
-            }
-            if (name === "PutObjectCommand") {
-                return Promise.resolve({});
-            }
-            if (name === "AbortMultipartUploadCommand") {
-                return Promise.resolve({});
-            }
-            return Promise.resolve({});
-        });
+        s3Mock.reset();
         ctx = new S3FMContext({
             bucketName: "my-bucket",
             bucketRegion: "us-east-1",
             endpoint: undefined,
             credentials: { accessKeyId: "x", secretAccessKey: "y" },
         });
-        // @ts-ignore override the internal client
-        ctx.s3.send = sendMock;
+        uploads = new UploadManager(ctx, 2);
 
-        uploads = new UploadManager(ctx, /* maxUploadConcurrency */ 2);
+        s3Mock
+            .on(CreateMultipartUploadCommand)
+            .resolves({ UploadId: "test-upload-id" });
+        s3Mock.on(UploadPartCommand).callsFake((params) => ({
+            ETag: `"etag-${params.PartNumber}"`,
+        }));
+        s3Mock.on(CompleteMultipartUploadCommand).resolves({});
+        s3Mock.on(PutObjectCommand).resolves({});
+        s3Mock.on(AbortMultipartUploadCommand).resolves({});
     });
 
     it("should do a simple PUT for zero-length payload", async () => {
@@ -62,20 +55,19 @@ describe("UploadManager", () => {
         };
         const opts: FileUploadOptions = {};
         await uploads.uploadFile(file, opts);
-        expect(sendMock).toHaveBeenCalledTimes(1);
-        const cmd = sendMock.mock.calls[0][0];
-        expect(cmd.constructor.name).toBe("PutObjectCommand");
+        expect(s3Mock.commandCalls(PutObjectCommand).length).toBe(1);
+        const cmd = s3Mock.commandCalls(PutObjectCommand)[0].args[0];
         // Body is the buffer
-        expect((cmd as any).input.Body).toBeInstanceOf(Buffer);
-        expect((cmd as any).input.Body.length).toBe(0);
+        expect(cmd.input.Body).toBeInstanceOf(Buffer);
+        expect((cmd.input.Body as Buffer).length).toBe(0);
     });
 
     it("should choose simpleUpload for under‐threshold buffer", async () => {
         const small = makeBufferOfSize(ctx.multipartThreshold - 1);
         await uploads.uploadFile({ name: "small.bin", content: small }, {});
-        expect(sendMock).toHaveBeenCalledWith(expect.anything());
-        const cmd = sendMock.mock.calls[0][0];
-        expect(cmd.constructor.name).toBe("PutObjectCommand");
+        expect(s3Mock.commandCalls(PutObjectCommand).length).toBe(1);
+        const cmd = s3Mock.commandCalls(PutObjectCommand)[0].args[0];
+        expect(cmd).toBeInstanceOf(PutObjectCommand);
     });
 
     it("should multipart‐upload a buffer in >threshold chunks", async () => {
@@ -85,18 +77,18 @@ describe("UploadManager", () => {
         await uploads.uploadFile({ name: "big.bin", content: buf }, {});
 
         // First call: CreateMultipartUploadCommand
-        const first = sendMock.mock.calls[0][0];
-        expect(first.constructor.name).toBe("CreateMultipartUploadCommand");
+        expect(s3Mock.commandCalls(CreateMultipartUploadCommand).length).toBe(
+            1
+        );
 
         // Then some UploadPartCommands…
-        const parts = sendMock.mock.calls.filter(
-            (c) => c[0].constructor.name === "UploadPartCommand"
-        );
+        const parts = s3Mock.commandCalls(UploadPartCommand);
         expect(parts.length).toBe(Math.ceil(size / ctx.multipartThreshold));
 
         // Finally a CompleteMultipartUploadCommand
-        const last = sendMock.mock.calls[sendMock.mock.calls.length - 1][0];
-        expect(last.constructor.name).toBe("CompleteMultipartUploadCommand");
+        expect(s3Mock.commandCalls(CompleteMultipartUploadCommand).length).toBe(
+            1
+        );
     });
 
     it("should multipart‐upload a stream without buffering all at once", async () => {
@@ -105,16 +97,13 @@ describe("UploadManager", () => {
         await uploads.uploadFile({ name: "stream.bin", content: stream }, {});
 
         // Same expectations as above
-        expect(sendMock).toHaveBeenCalled();
-        expect(sendMock.mock.calls[0][0].constructor.name).toBe(
-            "CreateMultipartUploadCommand"
+        expect(s3Mock.commandCalls(CreateMultipartUploadCommand).length).toBe(
+            1
         );
-        const partCalls = sendMock.mock.calls.filter(
-            (c) => c[0].constructor.name === "UploadPartCommand"
-        );
+        const partCalls = s3Mock.commandCalls(UploadPartCommand);
         expect(partCalls.length).toBe(Math.ceil(size / ctx.multipartThreshold));
-        expect(sendMock.mock.calls.slice(-1)[0][0].constructor.name).toBe(
-            "CompleteMultipartUploadCommand"
+        expect(s3Mock.commandCalls(CompleteMultipartUploadCommand).length).toBe(
+            1
         );
     });
 
