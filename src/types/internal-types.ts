@@ -1,4 +1,5 @@
 import {
+    BasicOptions,
     ConfirmFilesOptions,
     CopyFileOptions,
     DeleteFileOptions,
@@ -39,10 +40,9 @@ export interface DeleteFileOptionsInternal extends DeleteFileOptions {
     sourceBucketName?: string;
 }
 
-export interface ListItemsOptionsInternal {
+export interface ListItemsOptionsInternal extends BasicOptions {
     prefix?: string;
     filterFn?: (filename: string) => boolean;
     compareFn?: (a: string, b: string) => number;
     directoriesOnly?: boolean;
-    spanOptions: SpanOptions;
 }

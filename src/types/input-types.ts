@@ -52,7 +52,7 @@ export interface DownloadToDiskOptions extends BasicOptions {
 }
 
 export interface DownloadLinkOptions extends BasicOptions {
-    validDurationMinutes: number;
+    expiresInSec?: number;
 }
 
 export interface DownloadAllOptions extends BasicOptions {
@@ -66,5 +66,7 @@ export interface CopyFileOptions extends BasicOptions {
 export interface MoveFileOptions extends CopyFileOptions {}
 
 export interface DeleteFileOptions extends CopyFileOptions {}
+
+export interface DeleteFolderOptions extends BasicOptions {}
 
 export interface RenameFileOptions extends BasicOptions {}

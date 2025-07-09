@@ -3,6 +3,7 @@ import {
     HeadObjectCommand,
     HeadObjectCommandOutput,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { S3FMContext } from "./context.js";
 import { Readable } from "stream";
 import { backoffDelay, wait } from "../utils/wait.js";
@@ -25,6 +26,8 @@ import {
     GetFileFormatInput,
 } from "../types/internal-types.js";
 import { extension } from "mime-types";
+import Bottleneck from "bottleneck";
+import { DownloadAllReturnType } from "../types/return-types.js";
 
 const TEXT_MIME_PREFIXES = ["text/", "application/xml"];
 const TEXT_EXTENSIONS = ["txt", "csv", "xml", "md", "html"];
@@ -38,8 +41,11 @@ const TEXT_EXTENSIONS = ["txt", "csv", "xml", "md", "html"];
  */
 export class DownloadManager {
     private ctx: S3FMContext;
+    private limiter: Bottleneck;
+
     constructor(context: S3FMContext) {
         this.ctx = context;
+        this.limiter = new Bottleneck({ maxConcurrent: 6 });
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -244,24 +250,159 @@ export class DownloadManager {
             } else {
                 await pipeline(stream, createWriteStream(destinationPath));
             }
+
+            this.ctx.verboseLog(`Successfully downloaded ${filePath}`);
         });
     }
 
     // ════════════════════════════════════════════════════════════════
-    //
-    //
+    // 📦 BULK DOWNLOAD TO DISK
+    // Downloads all files with a given prefix to the local file system
     // ════════════════════════════════════════════════════════════════
+    public async downloadAllToDisk(
+        prefix: string,
+        outDir: string,
+        options: DownloadAllOptions
+    ): Promise<DownloadAllReturnType> {
+        const { spanOptions = {} } = options;
+        const failedToDownload: string[] = [];
 
-    public downloadAllToDisk(prefix: string, options: DownloadAllOptions) {}
+        const {
+            name: spanName = "S3FileManager.downloadAllToDisk",
+            attributes: spanAttributes = {
+                bucket: this.ctx.bucketName,
+                prefix,
+            },
+        } = spanOptions;
+
+        const result = await this.ctx.withSpan(
+            spanName,
+            spanAttributes,
+            async () => {
+                const filesToDownload = await this.ctx.listItems({
+                    prefix,
+                    spanOptions: {
+                        name: "S3FileManager.downloadAllToDisk > listItems",
+                        attributes: { bucket: this.ctx.bucketName, prefix },
+                    },
+                });
+
+                if (filesToDownload.length === 0) {
+                    return {
+                        success: true,
+                        message: `No files found with prefix ${prefix}`,
+                        downloadedFiles: 0,
+                        failedToDownload,
+                    };
+                }
+
+                await Promise.all(
+                    filesToDownload.map(async (file) => {
+                        try {
+                            await this.limiter.schedule(() =>
+                                this.downloadToDisk(file, outDir, {
+                                    spanOptions: {
+                                        name: "S3FileManager.downloadAllToDisk > downloadToDisk",
+                                        attributes: {
+                                            bucket: this.ctx.bucketName,
+                                            filePath: file,
+                                            outDir,
+                                        },
+                                    },
+                                })
+                            );
+                        } catch (error) {
+                            failedToDownload.push(file);
+                            this.ctx.verboseLog(
+                                `File ${file} failed to download: ${this.ctx.errorString(
+                                    error
+                                )}`,
+                                "warn"
+                            );
+                        }
+                    })
+                );
+
+                if (failedToDownload.length === 0) {
+                    return {
+                        success: true,
+                        message: `All files with prefix ${prefix} successfully downloaded`,
+                        downloadedFiles: filesToDownload.length,
+                        failedToDownload,
+                    };
+                } else if (failedToDownload.length === filesToDownload.length) {
+                    return {
+                        success: false,
+                        message: `All files with prefix ${prefix} failed to download. For details, enable verbose logging.`,
+                        downloadedFiles: 0,
+                        failedToDownload,
+                    };
+                } else {
+                    return {
+                        success: true,
+                        message: `Some files with prefix ${prefix} failed to download. For details, enable verbose logging.`,
+                        downloadedFiles:
+                            filesToDownload.length - failedToDownload.length,
+                        failedToDownload,
+                    };
+                }
+            }
+        );
+        return result;
+    }
 
     // ════════════════════════════════════════════════════════════════
-    //
-    //
+    // 🔗 GENERATE TEMPORARY SIGNED URL
+    // Generates a presigned URL for temporary access to an S3 file
     // ════════════════════════════════════════════════════════════════
-    public generateTempDownloadLink(
+    public async generateTempDownloadLink(
         filePath: string,
         options: DownloadLinkOptions
-    ) {}
+    ): Promise<string> {
+        const { spanOptions = {}, expiresInSec = 60 * 60 } = options;
+
+        const {
+            name: spanName = "S3FileManager.generateTempDownloadLink",
+            attributes: spanAttributes = {
+                bucket: this.ctx.bucketName,
+                filePath: filePath,
+                expiresInSec,
+            },
+        } = spanOptions;
+
+        const command = new GetObjectCommand({
+            Bucket: this.ctx.bucketName,
+            Key: filePath,
+        });
+
+        const result = await this.ctx.withSpan(
+            spanName,
+            spanAttributes,
+            async () => {
+                let attempt = 0;
+                while (true) {
+                    try {
+                        attempt++;
+                        const signedUrl = await getSignedUrl(
+                            this.ctx.s3,
+                            command,
+                            {
+                                expiresIn: expiresInSec,
+                            }
+                        );
+                        return signedUrl;
+                    } catch (error) {
+                        this.ctx.handleRetryErrorLogging(
+                            attempt,
+                            `to generate temporary download link for ${filePath}`,
+                            error
+                        );
+                    }
+                }
+            }
+        );
+        return result;
+    }
 
     // ════════════════════════════════════════════════════════════════
     // 🧾 GET FILE METADATA
