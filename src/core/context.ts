@@ -1,9 +1,11 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { FMConfig, Logger, WithSpanFn } from "../types/fmconfig-types.js";
 import { isValidLogger } from "../utils/isValidLogger.js";
 import { Readable } from "stream";
 import { StreamType } from "../utils/type-guards.js";
 import { Stream } from "../types/input-types.js";
+import { backoffDelay, wait } from "../utils/wait.js";
+import { ListItemsOptionsInternal } from "../types/internal-types.js";
 
 const MAX_ATTEMPTS_DEFAULT = 3;
 const MULTIPART_THRESHOLD_DEFAULT = 10 * 1024 * 1024;
@@ -57,9 +59,95 @@ export class S3FMContext {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // 🛠 UTILITIES
-    // General helper functions for internal use
+    // 📂 LIST ITEMS
+    // General-purpose function for listing files or directories
     // ════════════════════════════════════════════════════════════════
+
+    public async listItems(
+        options: ListItemsOptionsInternal
+    ): Promise<string[]> {
+        const {
+            prefix,
+            filterFn = (fileName: string) => true,
+            compareFn = undefined,
+            directoriesOnly = false,
+            spanOptions = {},
+        } = options;
+
+        const { name: spanName, attributes: spanAttributes } = spanOptions;
+
+        const params = {
+            Bucket: this.bucketName,
+            Prefix: prefix ? this.formatPrefix("", prefix) : undefined,
+            Delimiter: directoriesOnly ? "/" : undefined,
+        };
+
+        // Assert that spanName and spanAttributes exist, as they must be passed in by the two wrapper functions
+        const result = await this.withSpan(
+            spanName!,
+            spanAttributes!,
+            async () => {
+                const filteredItems: string[] = [];
+
+                let continuationToken: string | undefined = undefined;
+
+                do {
+                    let attempt = 0;
+                    let response;
+                    while (true) {
+                        try {
+                            attempt++;
+                            const command = new ListObjectsV2Command(params);
+                            response = await this.s3.send(command);
+                            break;
+                        } catch (error) {
+                            this.handleRetryErrorLogging(
+                                attempt,
+                                `to fetch list of ${
+                                    directoriesOnly ? "directories" : "files"
+                                }`,
+                                error
+                            );
+
+                            // Wait before next attempt
+                            await wait(backoffDelay(attempt));
+                        }
+                    }
+                    let items: string[];
+                    if (directoriesOnly) {
+                        items =
+                            response.CommonPrefixes?.map((p) => p.Prefix || "")
+                                .filter(Boolean)
+                                .filter(filterFn) || [];
+                    } else {
+                        items =
+                            response.Contents?.map((file) => file.Key || "")
+                                .filter(Boolean)
+                                .filter(filterFn) || [];
+                    }
+
+                    filteredItems.push(...items);
+                    continuationToken = response.NextContinuationToken;
+                    (params as any).ContinuationToken = continuationToken;
+                } while (continuationToken);
+
+                const sortedItems = filteredItems.sort(compareFn);
+
+                this.verboseLog(
+                    `Successfully retrieved ${sortedItems.length} ${
+                        directoriesOnly
+                            ? `director${
+                                  sortedItems.length === 1 ? "y" : "ies"
+                              }`
+                            : "file(s)"
+                    }${params.Prefix ? ` with prefix '${params.Prefix}'` : ""}'`
+                );
+
+                return sortedItems;
+            }
+        );
+        return result;
+    }
 
     // ════════════════════════════════════════════════════════════════
     // 📊 WITH SPAN
@@ -153,5 +241,27 @@ export class S3FMContext {
             const arrayBuffer = await (stream as Blob).arrayBuffer();
             return Buffer.from(arrayBuffer);
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // 🔧 FORMAT PREFIX
+    // Normalizes prefix and filename slashes for S3 object keys
+    // ════════════════════════════════════════════════════════════════
+
+    public formatPrefix(filename: string, prefix: string): string {
+        let formattedPrefix: string;
+
+        const prefixSlash = prefix.endsWith("/");
+        const filenameSlash = filename.startsWith("/");
+
+        if (prefixSlash && filenameSlash) {
+            formattedPrefix = prefix.slice(0, -1);
+        } else if (!prefixSlash && !filenameSlash) {
+            formattedPrefix = prefix + "/";
+        } else {
+            formattedPrefix = prefix;
+        }
+
+        return formattedPrefix;
     }
 }

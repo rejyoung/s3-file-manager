@@ -1,12 +1,14 @@
 import {
     CopyObjectCommand,
     DeleteObjectCommand,
+    DeleteObjectsCommand,
     HeadObjectCommand,
     ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { S3FMContext } from "./context.js";
 import { backoffDelay, wait } from "../utils/wait.js";
 import {
+    DeleteFolderOptions,
     ListDirectoriesOptions,
     ListFilesOptions,
     MoveFileOptions,
@@ -21,7 +23,9 @@ import {
 } from "../types/internal-types.js";
 import {
     CopyReturnType,
+    DeleteFolderReturnType,
     DeleteReturnType,
+    FileDeletionError,
     MoveReturnType,
     RenameReturnType,
 } from "../types/return-types.js";
@@ -38,96 +42,6 @@ export class FileService {
 
     constructor(context: S3FMContext) {
         this.ctx = context;
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // 📂 LIST ITEMS
-    // General-purpose function for listing files or directories
-    // ════════════════════════════════════════════════════════════════
-
-    private async listItems(
-        options: ListItemsOptionsInternal
-    ): Promise<string[]> {
-        const {
-            prefix,
-            filterFn = (fileName: string) => true,
-            compareFn = undefined,
-            directoriesOnly = false,
-            spanOptions,
-        } = options;
-
-        const { name: spanName, attributes: spanAttributes } = spanOptions;
-
-        const params = {
-            Bucket: this.ctx.bucketName,
-            Prefix: prefix ? this.formatPrefix("", prefix) : undefined,
-            Delimiter: directoriesOnly ? "/" : undefined,
-        };
-
-        // Assert that spanName and spanAttributes exist, as they must be passed in by the two wrapper functions
-        const result = await this.ctx.withSpan(
-            spanName!,
-            spanAttributes!,
-            async () => {
-                const filteredItems: string[] = [];
-
-                let continuationToken: string | undefined = undefined;
-
-                do {
-                    let attempt = 0;
-                    let response;
-                    while (true) {
-                        try {
-                            attempt++;
-                            const command = new ListObjectsV2Command(params);
-                            response = await this.ctx.s3.send(command);
-                            break;
-                        } catch (error) {
-                            this.ctx.handleRetryErrorLogging(
-                                attempt,
-                                `to fetch list of ${
-                                    directoriesOnly ? "directories" : "files"
-                                }`,
-                                error
-                            );
-
-                            // Wait before next attempt
-                            await wait(backoffDelay(attempt));
-                        }
-                    }
-                    let items: string[];
-                    if (directoriesOnly) {
-                        items =
-                            response.CommonPrefixes?.map((p) => p.Prefix || "")
-                                .filter(Boolean)
-                                .filter(filterFn) || [];
-                    } else {
-                        items =
-                            response.Contents?.map((file) => file.Key || "")
-                                .filter(Boolean)
-                                .filter(filterFn) || [];
-                    }
-
-                    filteredItems.push(...items);
-                    continuationToken = response.ContinuationToken;
-                } while (continuationToken);
-
-                const sortedItems = filteredItems.sort(compareFn);
-
-                this.ctx.verboseLog(
-                    `Successfully retrieved ${sortedItems.length} ${
-                        directoriesOnly
-                            ? `director${
-                                  sortedItems.length === 1 ? "y" : "ies"
-                              }`
-                            : "file(s)"
-                    }${params.Prefix ? ` with prefix '${params.Prefix}'` : ""}'`
-                );
-
-                return sortedItems;
-            }
-        );
-        return result;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -150,7 +64,7 @@ export class FileService {
             },
         } = spanOptions;
 
-        return await this.listItems({
+        return await this.ctx.listItems({
             prefix,
             filterFn,
             compareFn,
@@ -179,7 +93,7 @@ export class FileService {
             },
         } = spanOptions;
 
-        return await this.listItems({
+        return await this.ctx.listItems({
             prefix,
             filterFn,
             compareFn,
@@ -282,7 +196,7 @@ export class FileService {
         const trimmedFilename = path.posix.basename(filePath).trim();
 
         const toPrefix = destinationPrefix
-            ? this.formatPrefix(trimmedFilename, destinationPrefix.trim())
+            ? this.ctx.formatPrefix(trimmedFilename, destinationPrefix.trim())
             : "";
 
         const sourcePath = `${
@@ -302,6 +216,7 @@ export class FileService {
 
                 while (true) {
                     try {
+                        attempt++;
                         await this.ctx.s3.send(
                             new CopyObjectCommand({
                                 Bucket: this.ctx.bucketName,
@@ -466,7 +381,7 @@ export class FileService {
                 return {
                     success: true,
                     oldPath: filePath,
-                    newPath: location + newFilename,
+                    newPath: `${location}/${newFilename}`,
                     originalDeleted: deleteSuccess,
                 };
             }
@@ -551,25 +466,162 @@ export class FileService {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //
+    // 📂❌ DELETE FOLDER
+    // Deletes all objects under the given prefix ("folder") in the S3 bucket
     // ════════════════════════════════════════════════════════════════
 
-    public deleteFolder() {}
+    public async deleteFolder(
+        prefix: string,
+        options: DeleteFolderOptions
+    ): Promise<DeleteFolderReturnType> {
+        const { spanOptions = {} } = options;
 
-    private formatPrefix(filename: string, prefix: string): string {
-        let formattedPrefix: string;
+        const {
+            name: spanName = "S3FileManager.deleteFolder",
+            attributes: spanAttributes = {
+                bucket: this.ctx.bucketName,
+                prefix: prefix,
+            },
+        } = spanOptions;
 
-        const prefixSlash = prefix.endsWith("/");
-        const filenameSlash = filename.startsWith("/");
+        const result = await this.ctx.withSpan(
+            spanName,
+            spanAttributes,
+            async () => {
+                try {
+                    const filePaths = await this.listFiles({
+                        prefix,
+                        spanOptions: {
+                            name: "S3FileManager.deleteFolder > listFiles",
+                            attributes: spanAttributes,
+                        },
+                    });
 
-        if (prefixSlash && filenameSlash) {
-            formattedPrefix = prefix.slice(0, -1);
-        } else if (!prefixSlash && !filenameSlash) {
-            formattedPrefix = prefix + "/";
-        } else {
-            formattedPrefix = prefix;
-        }
+                    const { succeeded, fileDeletionErrors } =
+                        await this.deleteObjects(
+                            filePaths,
+                            "S3FileManager.deleteFolder"
+                        );
 
-        return formattedPrefix;
+                    if (fileDeletionErrors.length > 0) {
+                        return {
+                            success: true,
+                            message: `Some files in folder ${prefix} could not be deleted.`,
+                            failed: fileDeletionErrors.length,
+                            succeeded,
+                            fileDeletionErrors,
+                        };
+                    } else if (fileDeletionErrors.length === filePaths.length) {
+                        return {
+                            success: false,
+                            message: `Failed to delete all files contained in folder ${prefix}`,
+                            failed: fileDeletionErrors.length,
+                            succeeded,
+                            fileDeletionErrors,
+                        };
+                    } else {
+                        return {
+                            success: true,
+                            message: `Folder ${prefix} and the ${filePaths.length} files contained in it successfully deleted.`,
+                            failed: 0,
+                            succeeded,
+                            fileDeletionErrors: [],
+                        };
+                    }
+                } catch (error) {
+                    throw new Error(
+                        `An error occurred while attempting to delete folder ${prefix}: ${this.ctx.errorString(
+                            error
+                        )}`
+                    );
+                }
+            }
+        );
+        return result;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // 🚮 DELETE OBJECTS (BATCH)
+    // Performs a batch delete of multiple S3 objects
+    // ════════════════════════════════════════════════════════════════
+
+    private async deleteObjects(
+        filePaths: string[],
+        callerName: string
+    ): Promise<{
+        succeeded: number;
+        fileDeletionErrors: FileDeletionError[];
+    }> {
+        const result = await this.ctx.withSpan(
+            `${callerName} > deleteObjects`,
+            {
+                bucket: this.ctx.bucketName,
+                numberOfObjects: filePaths.length,
+            },
+            async () => {
+                const fileDeletionErrors: FileDeletionError[] = [];
+                let succeeded: number = 0;
+
+                let filePathBatch: string[] = [];
+                for (let i = 0; i < filePaths.length; i++) {
+                    filePathBatch.push(filePaths[i]);
+
+                    if (
+                        filePathBatch.length === 1000 ||
+                        i === filePaths.length - 1
+                    ) {
+                        const command = new DeleteObjectsCommand({
+                            Bucket: this.ctx.bucketName,
+                            Delete: {
+                                Objects: filePathBatch.map((path) => ({
+                                    Key: path,
+                                })),
+                                Quiet: false,
+                            },
+                        });
+                        let attempt = 0;
+                        while (true) {
+                            try {
+                                attempt++;
+                                const response = await this.ctx.s3.send(
+                                    command
+                                );
+                                const { Deleted, Errors } = response;
+
+                                Errors?.forEach((err) => {
+                                    if (this.ctx.allowVerboseLogging) {
+                                        this.ctx.verboseLog(
+                                            this.ctx.errorString(err),
+                                            "warn"
+                                        );
+                                    }
+                                    fileDeletionErrors.push({
+                                        filePath: err.Key!,
+                                        error: err,
+                                    });
+                                });
+
+                                succeeded += Deleted?.length ?? 0;
+                                filePathBatch = [];
+                                break;
+                            } catch (error) {
+                                this.ctx.handleRetryErrorLogging(
+                                    attempt,
+                                    "to delete objects",
+                                    error
+                                );
+                                await wait(backoffDelay(attempt));
+                            }
+                        }
+                    }
+                }
+                return {
+                    succeeded,
+                    fileDeletionErrors,
+                };
+            }
+        );
+
+        return result;
     }
 }
