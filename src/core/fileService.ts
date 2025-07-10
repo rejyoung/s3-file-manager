@@ -29,6 +29,7 @@ import {
     MoveReturnType,
     RenameReturnType,
 } from "../types/return-types.js";
+import { formatPrefix } from "../utils/formatPrefix.js";
 
 /**
  ╔════════════════════════════════════════════════════════════════════════════════╗
@@ -48,7 +49,9 @@ export class FileService {
     // 📁 LIST DIRECTORIES
     // Lists all directories (common prefixes) from a specified prefix
     // ════════════════════════════════════════════════════════════════
-    public async listDirectories(options: ListDirectoriesOptions = {}) {
+    public async listDirectories(
+        options: ListDirectoriesOptions = {}
+    ): Promise<string[]> {
         const {
             prefix,
             filterFn = (fileName: string) => true,
@@ -77,7 +80,7 @@ export class FileService {
     // 📄 LIST FILES
     // Lists all files (excluding directories) from a specified prefix
     // ════════════════════════════════════════════════════════════════
-    public async listFiles(options: ListFilesOptions = {}) {
+    public async listFiles(options: ListFilesOptions = {}): Promise<string[]> {
         const {
             prefix,
             filterFn = (fileName: string) => true,
@@ -196,7 +199,7 @@ export class FileService {
         const trimmedFilename = path.posix.basename(filePath).trim();
 
         const toPrefix = destinationPrefix
-            ? this.ctx.formatPrefix(trimmedFilename, destinationPrefix.trim())
+            ? formatPrefix(trimmedFilename, destinationPrefix.trim())
             : "";
 
         const sourcePath = `${

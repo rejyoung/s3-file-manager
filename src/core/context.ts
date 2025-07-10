@@ -6,6 +6,7 @@ import { StreamType } from "../utils/type-guards.js";
 import { Stream } from "../types/input-types.js";
 import { backoffDelay, wait } from "../utils/wait.js";
 import { ListItemsOptionsInternal } from "../types/internal-types.js";
+import { formatPrefix } from "../utils/formatPrefix.js";
 
 const MAX_ATTEMPTS_DEFAULT = 3;
 const MULTIPART_THRESHOLD_DEFAULT = 10 * 1024 * 1024;
@@ -78,7 +79,7 @@ export class S3FMContext {
 
         const params = {
             Bucket: this.bucketName,
-            Prefix: prefix ? this.formatPrefix("", prefix) : undefined,
+            Prefix: prefix ? formatPrefix("", prefix) : undefined,
             Delimiter: directoriesOnly ? "/" : undefined,
         };
 
@@ -241,27 +242,5 @@ export class S3FMContext {
             const arrayBuffer = await (stream as Blob).arrayBuffer();
             return Buffer.from(arrayBuffer);
         }
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // 🔧 FORMAT PREFIX
-    // Normalizes prefix and filename slashes for S3 object keys
-    // ════════════════════════════════════════════════════════════════
-
-    public formatPrefix(filename: string, prefix: string): string {
-        let formattedPrefix: string;
-
-        const prefixSlash = prefix.endsWith("/");
-        const filenameSlash = filename.startsWith("/");
-
-        if (prefixSlash && filenameSlash) {
-            formattedPrefix = prefix.slice(0, -1);
-        } else if (!prefixSlash && !filenameSlash) {
-            formattedPrefix = prefix + "/";
-        } else {
-            formattedPrefix = prefix;
-        }
-
-        return formattedPrefix;
     }
 }
