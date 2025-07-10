@@ -1,4 +1,4 @@
-// tests/uploadManager.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Readable } from "stream";
 import {
     S3Client,
@@ -22,20 +22,32 @@ function makeStreamOfSize(n: number): Readable {
     return Readable.from(buf);
 }
 
+const s3Mock = mockClient(S3Client);
+
+const mockCtx = {
+    bucketName: "test-bucket",
+    s3: s3Mock,
+    withSpan: async (_name: string, _attrs: any, fn: Function) => await fn(),
+    verboseLog: vi.fn(),
+    handleRetryErrorLogging: vi.fn(),
+    logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+    },
+    multipartThreshold: 10 * 1024 * 1024,
+    maxUploadConcurrency: 4,
+} as unknown as S3FMContext;
+
+// Override s3 with mockS3
+Object.defineProperty(mockCtx, "s3", { value: s3Mock, writable: false });
+
 describe("UploadManager", () => {
     let ctx: S3FMContext;
     let uploads: UploadManager;
-    const s3Mock = mockClient(S3Client);
 
     beforeEach(() => {
         s3Mock.reset();
-        ctx = new S3FMContext({
-            bucketName: "my-bucket",
-            bucketRegion: "us-east-1",
-            endpoint: undefined,
-            credentials: { accessKeyId: "x", secretAccessKey: "y" },
-        });
-        uploads = new UploadManager(ctx, 2);
+        uploads = new UploadManager(mockCtx, 2);
 
         s3Mock
             .on(CreateMultipartUploadCommand)
@@ -63,7 +75,7 @@ describe("UploadManager", () => {
     });
 
     it("should choose simpleUpload for under‐threshold buffer", async () => {
-        const small = makeBufferOfSize(ctx.multipartThreshold - 1);
+        const small = makeBufferOfSize(mockCtx.multipartThreshold - 1);
         await uploads.uploadFile({ name: "small.bin", content: small }, {});
         expect(s3Mock.commandCalls(PutObjectCommand).length).toBe(1);
         const cmd = s3Mock.commandCalls(PutObjectCommand)[0].args[0];
@@ -72,7 +84,8 @@ describe("UploadManager", () => {
 
     it("should multipart‐upload a buffer in >threshold chunks", async () => {
         // Create a buffer of exactly 3×threshold + half threshold
-        const size = ctx.multipartThreshold * 3 + ctx.multipartThreshold / 2;
+        const size =
+            mockCtx.multipartThreshold * 3 + mockCtx.multipartThreshold / 2;
         const buf = makeBufferOfSize(size);
         await uploads.uploadFile({ name: "big.bin", content: buf }, {});
 
@@ -83,7 +96,7 @@ describe("UploadManager", () => {
 
         // Then some UploadPartCommands…
         const parts = s3Mock.commandCalls(UploadPartCommand);
-        expect(parts.length).toBe(Math.ceil(size / ctx.multipartThreshold));
+        expect(parts.length).toBe(Math.ceil(size / mockCtx.multipartThreshold));
 
         // Finally a CompleteMultipartUploadCommand
         expect(s3Mock.commandCalls(CompleteMultipartUploadCommand).length).toBe(
@@ -92,7 +105,7 @@ describe("UploadManager", () => {
     });
 
     it("should multipart‐upload a stream without buffering all at once", async () => {
-        const size = ctx.multipartThreshold * 2 + 1234;
+        const size = mockCtx.multipartThreshold * 2 + 1234;
         const stream = makeStreamOfSize(size);
         await uploads.uploadFile({ name: "stream.bin", content: stream }, {});
 
@@ -101,17 +114,19 @@ describe("UploadManager", () => {
             1
         );
         const partCalls = s3Mock.commandCalls(UploadPartCommand);
-        expect(partCalls.length).toBe(Math.ceil(size / ctx.multipartThreshold));
+        expect(partCalls.length).toBe(
+            Math.ceil(size / mockCtx.multipartThreshold)
+        );
         expect(s3Mock.commandCalls(CompleteMultipartUploadCommand).length).toBe(
             1
         );
     });
 
     it("bufferToChunks splits exactly at the threshold", () => {
-        const buf = makeBufferOfSize(ctx.multipartThreshold * 2);
+        const buf = makeBufferOfSize(mockCtx.multipartThreshold * 2);
         const chunks = uploads["bufferToChunks"](buf);
         expect(chunks).toHaveLength(2);
-        expect(chunks[0].length).toBe(ctx.multipartThreshold);
-        expect(chunks[1].length).toBe(ctx.multipartThreshold);
+        expect(chunks[0].length).toBe(mockCtx.multipartThreshold);
+        expect(chunks[1].length).toBe(mockCtx.multipartThreshold);
     });
 });

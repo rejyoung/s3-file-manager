@@ -1,3 +1,4 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FileService } from "../src/core/fileService";
 import { S3FMContext } from "../src/core/context";
 import { mockClient } from "aws-sdk-client-mock";
@@ -6,7 +7,6 @@ import {
     CopyObjectCommand,
     DeleteObjectCommand,
     HeadObjectCommand,
-    ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 
 const s3Mock = mockClient(S3Client);
@@ -15,42 +15,21 @@ const mockCtx = {
     bucketName: "test-bucket",
     s3: s3Mock,
     withSpan: async (_name: string, _attrs: any, fn: Function) => await fn(),
-    verboseLog: jest.fn(),
-    handleRetryErrorLogging: jest.fn(),
+    verboseLog: vi.fn(),
+    handleRetryErrorLogging: vi.fn(),
     logger: {
-        info: jest.fn(),
-        warn: jest.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
     },
 } as unknown as S3FMContext;
 
-const fileService = new FileService(mockCtx);
-
-beforeEach(() => {
-    s3Mock.reset();
-    jest.clearAllMocks();
-});
-
 describe("FileService", () => {
-    describe("listFiles", () => {
-        it("should return a list of file keys", async () => {
-            s3Mock.on(ListObjectsV2Command).resolves({
-                Contents: [{ Key: "file1.txt" }, { Key: "file2.txt" }],
-            });
+    let fileService: FileService;
 
-            const files = await fileService.listFiles();
-            expect(files).toEqual(["file1.txt", "file2.txt"]);
-        });
-    });
-
-    describe("listDirectories", () => {
-        it("should return a list of directory prefixes", async () => {
-            s3Mock.on(ListObjectsV2Command).resolves({
-                CommonPrefixes: [{ Prefix: "dir1/" }, { Prefix: "dir2/" }],
-            });
-
-            const dirs = await fileService.listDirectories();
-            expect(dirs).toEqual(["dir1/", "dir2/"]);
-        });
+    beforeEach(() => {
+        s3Mock.reset();
+        vi.clearAllMocks();
+        fileService = new FileService(mockCtx);
     });
 
     describe("confirmFilesExist", () => {

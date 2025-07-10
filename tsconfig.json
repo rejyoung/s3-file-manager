@@ -10,7 +10,8 @@
         "outDir": "dist",
         "declaration": true,
         "declarationDir": "dist/types",
-        "esModuleInterop": true
+        "esModuleInterop": true,
+        "types": ["node", "vitest"]
     },
     "include": ["src/**/*"]
 }
