@@ -32,11 +32,11 @@ describe("FileService", () => {
         fileService = new FileService(mockCtx);
     });
 
-    describe("confirmFilesExist", () => {
+    describe("verifyFilesExist", () => {
         it("should return an empty array if all files exist", async () => {
             s3Mock.on(HeadObjectCommand).resolves({});
 
-            const missing = await fileService.confirmFilesExist([
+            const missing = await fileService.verifyFilesExist([
                 "file1.txt",
                 "file2.txt",
             ]);
@@ -49,7 +49,7 @@ describe("FileService", () => {
                 $metadata: { httpStatusCode: 404 },
             });
 
-            const missing = await fileService.confirmFilesExist([
+            const missing = await fileService.verifyFilesExist([
                 "file1.txt",
                 "file2.txt",
             ]);
@@ -69,21 +69,21 @@ describe("FileService", () => {
     });
 
     describe("deleteFile", () => {
-        it("should delete a file and return success", async () => {
+        it("should delete a file and return nothing", async () => {
             s3Mock.on(DeleteObjectCommand).resolves({});
 
-            const result = await fileService.deleteFile("file1.txt");
-            expect(result.success).toBe(true);
-            expect(result.deleted).toBe(true);
-        });
+            // This will fail the test if deleteFile throws
+            await expect(
+                fileService.deleteFile("file1.txt")
+            ).resolves.toBeUndefined();
 
-        it("should handle file not found gracefully", async () => {
-            s3Mock.on(DeleteObjectCommand).rejects({ name: "NoSuchKey" });
-
-            const result = await fileService.deleteFile("missing.txt");
-            expect(result.success).toBe(false);
-            expect(result.deleted).toBe(false);
-            expect(result.reason).toBe("File not found");
+            // Optional: confirm the correct command was issued
+            expect(
+                s3Mock.commandCalls(DeleteObjectCommand, {
+                    Bucket: "test-bucket",
+                    Key: "file1.txt",
+                })
+            ).toHaveLength(1);
         });
     });
 });

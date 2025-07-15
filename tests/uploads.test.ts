@@ -11,7 +11,7 @@ import {
 import { mockClient } from "aws-sdk-client-mock";
 import { UploadManager } from "../src/core/uploadManager";
 import { S3FMContext } from "../src/core/context";
-import { FilePayload, FileUploadOptions } from "../src/types/input-types";
+import { FilePayload, UploadOptions } from "../src/types/input-types";
 
 // -- a tiny helper to create a buffer or stream of given length
 function makeBufferOfSize(n: number): Buffer {
@@ -34,7 +34,7 @@ const mockCtx = {
         info: vi.fn(),
         warn: vi.fn(),
     },
-    multipartThreshold: 10 * 1024 * 1024,
+    maxUploadPartSize: 10 * 1024 * 1024,
     maxUploadConcurrency: 4,
 } as unknown as S3FMContext;
 
@@ -65,7 +65,7 @@ describe("UploadManager", () => {
             name: "empty.txt",
             content: makeBufferOfSize(0),
         };
-        const opts: FileUploadOptions = {};
+        const opts: UploadOptions = {};
         await uploads.uploadFile(file, opts);
         expect(s3Mock.commandCalls(PutObjectCommand).length).toBe(1);
         const cmd = s3Mock.commandCalls(PutObjectCommand)[0].args[0];
@@ -75,7 +75,7 @@ describe("UploadManager", () => {
     });
 
     it("should choose simpleUpload for under‐threshold buffer", async () => {
-        const small = makeBufferOfSize(mockCtx.multipartThreshold - 1);
+        const small = makeBufferOfSize(mockCtx.maxUploadPartSize - 1);
         await uploads.uploadFile({ name: "small.bin", content: small }, {});
         expect(s3Mock.commandCalls(PutObjectCommand).length).toBe(1);
         const cmd = s3Mock.commandCalls(PutObjectCommand)[0].args[0];
@@ -85,7 +85,7 @@ describe("UploadManager", () => {
     it("should multipart‐upload a buffer in >threshold chunks", async () => {
         // Create a buffer of exactly 3×threshold + half threshold
         const size =
-            mockCtx.multipartThreshold * 3 + mockCtx.multipartThreshold / 2;
+            mockCtx.maxUploadPartSize * 3 + mockCtx.maxUploadPartSize / 2;
         const buf = makeBufferOfSize(size);
         await uploads.uploadFile({ name: "big.bin", content: buf }, {});
 
@@ -96,7 +96,7 @@ describe("UploadManager", () => {
 
         // Then some UploadPartCommands…
         const parts = s3Mock.commandCalls(UploadPartCommand);
-        expect(parts.length).toBe(Math.ceil(size / mockCtx.multipartThreshold));
+        expect(parts.length).toBe(Math.ceil(size / mockCtx.maxUploadPartSize));
 
         // Finally a CompleteMultipartUploadCommand
         expect(s3Mock.commandCalls(CompleteMultipartUploadCommand).length).toBe(
@@ -105,7 +105,7 @@ describe("UploadManager", () => {
     });
 
     it("should multipart‐upload a stream without buffering all at once", async () => {
-        const size = mockCtx.multipartThreshold * 2 + 1234;
+        const size = mockCtx.maxUploadPartSize * 2 + 1234;
         const stream = makeStreamOfSize(size);
         await uploads.uploadFile({ name: "stream.bin", content: stream }, {});
 
@@ -115,7 +115,7 @@ describe("UploadManager", () => {
         );
         const partCalls = s3Mock.commandCalls(UploadPartCommand);
         expect(partCalls.length).toBe(
-            Math.ceil(size / mockCtx.multipartThreshold)
+            Math.ceil(size / mockCtx.maxUploadPartSize)
         );
         expect(s3Mock.commandCalls(CompleteMultipartUploadCommand).length).toBe(
             1
@@ -123,10 +123,10 @@ describe("UploadManager", () => {
     });
 
     it("bufferToChunks splits exactly at the threshold", () => {
-        const buf = makeBufferOfSize(mockCtx.multipartThreshold * 2);
+        const buf = makeBufferOfSize(mockCtx.maxUploadPartSize * 2);
         const chunks = uploads["bufferToChunks"](buf);
         expect(chunks).toHaveLength(2);
-        expect(chunks[0].length).toBe(mockCtx.multipartThreshold);
-        expect(chunks[1].length).toBe(mockCtx.multipartThreshold);
+        expect(chunks[0].length).toBe(mockCtx.maxUploadPartSize);
+        expect(chunks[1].length).toBe(mockCtx.maxUploadPartSize);
     });
 });

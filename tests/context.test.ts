@@ -26,27 +26,27 @@ describe("S3FMContext.listItems", () => {
         s3Mock
             .on(ListObjectsV2Command, {
                 Bucket: "test-bucket",
-                Prefix: undefined,
+                Prefix: "files/",
                 Delimiter: undefined,
             })
             .resolvesOnce({
-                Contents: [{ Key: "b.txt" }, { Key: "a.txt" }],
+                Contents: [{ Key: "files/b.txt" }, { Key: "files/a.txt" }],
                 NextContinuationToken: "token1",
             });
         // Second (final) page
         s3Mock
             .on(ListObjectsV2Command, {
                 Bucket: "test-bucket",
-                Prefix: undefined,
+                Prefix: "files/",
                 Delimiter: undefined,
                 ContinuationToken: "token1",
             })
             .resolvesOnce({
-                Contents: [{ Key: "c.txt" }],
+                Contents: [{ Key: "files/c.txt" }],
             });
 
-        const result = await ctx.listItems({});
-        expect(result).toEqual(["a.txt", "b.txt", "c.txt"]);
+        const result = await ctx.listItems("files", {});
+        expect(result).toEqual(["files/a.txt", "files/b.txt", "files/c.txt"]);
     });
 
     it("should list only directory prefixes when directoriesOnly is true", async () => {
@@ -54,26 +54,27 @@ describe("S3FMContext.listItems", () => {
             CommonPrefixes: [{ Prefix: "dir1/" }, { Prefix: "dir2/" }],
         });
 
-        const result = await ctx.listItems({ directoriesOnly: true });
+        const result = await ctx.listItems("", { directoriesOnly: true });
         expect(result).toEqual(["dir1/", "dir2/"]);
     });
 
     it("should apply filterFn and compareFn correctly", async () => {
         s3Mock.on(ListObjectsV2Command).resolves({
             Contents: [
+                { Key: "apricot.txt" },
                 { Key: "apple.txt" },
                 { Key: "banana.txt" },
                 { Key: "cherry.txt" },
             ],
         });
 
-        const filterFn = (name: string) => name.startsWith("b");
-        const compareFn = (x: string, y: string) => y.localeCompare(x);
+        const filterFn = (name: string) => name.startsWith("a");
+        const compareFn = (x: string, y: string) => x.localeCompare(y);
 
-        const result = await ctx.listItems({
+        const result = await ctx.listItems("", {
             filterFn,
             compareFn,
         });
-        expect(result).toEqual(["banana.txt"]);
+        expect(result).toEqual(["apple.txt", "apricot.txt"]);
     });
 });
