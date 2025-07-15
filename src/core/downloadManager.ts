@@ -265,7 +265,6 @@ export class DownloadManager {
         options: DownloadFolderOptions = {}
     ): Promise<DownloadFolderReturnType> {
         const { spanOptions = {} } = options;
-        const failedToDownload: string[] = [];
 
         const {
             name: spanName = "S3FileManager.downloadFolderToDisk",
@@ -291,7 +290,7 @@ export class DownloadManager {
                         success: true,
                         message: `No files found with prefix ${prefix}`,
                         downloadedFiles: 0,
-                        failedToDownload,
+                        failedToDownload: [],
                     };
                 }
 
@@ -302,7 +301,7 @@ export class DownloadManager {
                 const smallestFolder = path.basename(trimmedPrefix);
                 const outPath = path.join(outDir, smallestFolder);
 
-                await Promise.all(
+                const result = await Promise.all(
                     filesToDownload.map(async (file) => {
                         // Construct out directory (adjustedOutDir) for specific files to preserve internal file structure
                         // by appending folders nested within the prefix to the out directory.
@@ -329,17 +328,20 @@ export class DownloadManager {
                                     },
                                 })
                             );
+                            return null;
                         } catch (error) {
-                            failedToDownload.push(file);
                             this.ctx.verboseLog(
                                 `File ${file} failed to download: ${this.ctx.errorString(
                                     error
                                 )}`,
                                 "warn"
                             );
+                            return file;
                         }
                     })
                 );
+
+                const failedToDownload = result.filter(Boolean) as string[];
 
                 if (failedToDownload.length === 0) {
                     return {
@@ -441,6 +443,7 @@ export class DownloadManager {
             async () => {
                 let attempt = 0;
                 while (true) {
+                    attempt++;
                     try {
                         const response = await this.ctx.s3.send(command);
 
@@ -515,7 +518,10 @@ export class DownloadManager {
             }
         } else if (fileType || (fileBuffer && !isUtf8(fileBuffer))) {
             returnType = "buffer";
-        } else if (filePathLC.endsWith("json")) {
+        } else if (
+            filePathLC.endsWith("json") &&
+            (!fileBuffer || isUtf8(fileBuffer))
+        ) {
             returnType = "json";
         } else if (
             TEXT_EXTENSIONS.some((extension) => filePathLC.endsWith(extension))
