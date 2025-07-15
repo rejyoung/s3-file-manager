@@ -12,6 +12,7 @@ import { mockClient } from "aws-sdk-client-mock";
 import { UploadManager } from "../src/core/uploadManager";
 import { S3FMContext } from "../src/core/context";
 import { FilePayload, UploadOptions } from "../src/types/input-types";
+import fs from "fs";
 
 // -- a tiny helper to create a buffer or stream of given length
 function makeBufferOfSize(n: number): Buffer {
@@ -128,5 +129,119 @@ describe("UploadManager", () => {
         expect(chunks).toHaveLength(2);
         expect(chunks[0].length).toBe(mockCtx.maxUploadPartSize);
         expect(chunks[1].length).toBe(mockCtx.maxUploadPartSize);
+    });
+    it("should buffer and upload a small file from disk", async () => {
+        const fakePath = "/tmp/small.txt";
+        const fakeContent = Buffer.from("abc");
+        const fakeStats = { size: fakeContent.length };
+
+        vi.spyOn(fs, "statSync").mockReturnValue(fakeStats as fs.Stats);
+        vi.spyOn(fs, "readFileSync").mockReturnValue(fakeContent);
+
+        const spyUploadFile = vi
+            .spyOn(uploads, "uploadFile")
+            .mockResolvedValue("uploaded/small.txt");
+
+        const result = await uploads.uploadFromDisk(fakePath);
+        expect(result).toBe("uploaded/small.txt");
+
+        expect(fs.statSync).toHaveBeenCalledWith(fakePath);
+        expect(fs.readFileSync).toHaveBeenCalledWith(fakePath);
+        expect(spyUploadFile).toHaveBeenCalledWith(
+            {
+                name: "small.txt",
+                content: fakeContent,
+                sizeHintBytes: fakeContent.length,
+            },
+            expect.anything()
+        );
+    });
+
+    it("should stream and upload a large file from disk", async () => {
+        const fakePath = "/tmp/large.txt";
+        const largeSize = mockCtx.maxUploadPartSize + 1;
+        const fakeStats = { size: largeSize };
+
+        vi.spyOn(fs, "statSync").mockReturnValue(fakeStats as fs.Stats);
+        const fakeStream = {
+            ...Readable.from(Buffer.alloc(largeSize)),
+            fakePath,
+            close: vi.fn(),
+            bytesRead: 0,
+            pending: false,
+        } as unknown as fs.ReadStream;
+        vi.spyOn(fs, "createReadStream").mockReturnValue(fakeStream);
+
+        const spyUploadFile = vi
+            .spyOn(uploads, "uploadFile")
+            .mockResolvedValue("uploaded/large.txt");
+
+        const result = await uploads.uploadFromDisk(fakePath);
+        expect(result).toBe("uploaded/large.txt");
+
+        expect(fs.statSync).toHaveBeenCalledWith(fakePath);
+        expect(fs.createReadStream).toHaveBeenCalledWith(fakePath);
+        expect(spyUploadFile).toHaveBeenCalledWith(
+            {
+                name: "large.txt",
+                content: fakeStream,
+                sizeHintBytes: largeSize,
+            },
+            expect.anything()
+        );
+    });
+
+    it("should prepare multiple streams from disk and upload them", async () => {
+        const filePaths = ["/tmp/one.txt", "/tmp/two.txt"];
+        const fakeStats = { size: 5000 };
+        const fakeStreams = filePaths.map(
+            (path) =>
+                ({
+                    ...Readable.from("test content"),
+                    path,
+                    close: vi.fn(),
+                    bytesRead: 0,
+                    pending: false,
+                } as unknown as fs.ReadStream)
+        );
+
+        vi.spyOn(fs.promises, "stat").mockImplementation(
+            async () => fakeStats as fs.Stats
+        );
+        vi.spyOn(fs, "createReadStream").mockImplementation(
+            () => fakeStreams.shift()!
+        );
+
+        const spyUploadMultiple = vi
+            .spyOn(uploads, "uploadMultipleFiles")
+            .mockResolvedValue({
+                filePaths: ["uploaded/one.txt", "uploaded/two.txt"],
+                skippedFiles: [],
+            });
+
+        const result = await uploads.uploadMultipleFromDisk(filePaths);
+        expect(result.filePaths).toEqual([
+            "uploaded/one.txt",
+            "uploaded/two.txt",
+        ]);
+
+        for (const path of filePaths) {
+            expect(fs.promises.stat).toHaveBeenCalledWith(path);
+            expect(fs.createReadStream).toHaveBeenCalledWith(path);
+        }
+
+        expect(spyUploadMultiple).toHaveBeenCalledWith(
+            [
+                expect.objectContaining({
+                    name: "one.txt",
+                    sizeHintBytes: fakeStats.size,
+                }),
+                expect.objectContaining({
+                    name: "two.txt",
+                    sizeHintBytes: fakeStats.size,
+                }),
+            ],
+            expect.anything()
+        );
     });
 });

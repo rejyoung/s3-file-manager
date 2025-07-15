@@ -190,7 +190,7 @@ describe("DownloadManager", () => {
             });
 
             expect(writeFile).toHaveBeenCalledWith(
-                "/tmpfoo.bin",
+                "/tmp/foo.bin",
                 Buffer.from("abc")
             );
         });

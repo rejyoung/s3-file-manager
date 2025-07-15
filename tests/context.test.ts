@@ -51,11 +51,14 @@ describe("S3FMContext.listItems", () => {
 
     it("should list only directory prefixes when directoriesOnly is true", async () => {
         s3Mock.on(ListObjectsV2Command).resolves({
-            CommonPrefixes: [{ Prefix: "dir1/" }, { Prefix: "dir2/" }],
+            Contents: [
+                { Key: "dir1/example.txt" },
+                { Key: "dir1/dir2/example2.json" },
+            ],
         });
 
         const result = await ctx.listItems("", { directoriesOnly: true });
-        expect(result).toEqual(["dir1/", "dir2/"]);
+        expect(result).toEqual(["dir1/", "dir1/dir2/"]);
     });
 
     it("should apply filterFn and compareFn correctly", async () => {
