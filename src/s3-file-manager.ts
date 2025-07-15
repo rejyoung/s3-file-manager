@@ -212,8 +212,8 @@ export class S3FileManager {
     /**
      * Uploads a file to the configured S3 bucket.
      * Automatically chooses between single and multipart upload based on size.
-     * @param file - Object containing file name and content (Buffer or Readable).
-     * @param options - Optional settings including prefix, content type, and size hint.
+     * @param file - Object containing file name, content (Buffer or Readable), optional MIME type, and optional size hint.
+     * @param options - Optional settings including prefix and spanOptions.
      * @returns A promise that resolves when the file is successfully uploaded.
      */
 
@@ -227,8 +227,8 @@ export class S3FileManager {
     /**
      * Uploads multiple files concurrently to S3.
      * Gracefully logs and skips failed uploads without halting the entire batch.
-     * @param files - Array of file objects to upload.
-     * @param options - Optional settings including prefix and content type.
+     * @param files - Array of file objects, each containing file name, content (Buffer or Readable), optional MIME type, and optional size hint.
+     * @param options - Optional settings including prefix and spanOptions.
      * @returns A promise resolving to a list of files that failed to upload.
      */
 
@@ -237,6 +237,38 @@ export class S3FileManager {
         options?: UploadOptions
     ): Promise<UploadFilesReturnType> {
         return await this.uploads.uploadMultipleFiles(files, options);
+    }
+
+    /**
+     * Uploads a single file from a local disk path to the S3 bucket.
+     * Automatically determines file name and stream type.
+     * @param localFilePath - Absolute or relative path to the local file to upload.
+     * @param options - Optional settings including prefix and spanOptions.
+     * @returns A promise resolving to the S3 key (path) of the uploaded file.
+     */
+    public async uploadFromDisk(
+        localFilePath: string,
+        options: UploadOptions = {}
+    ): Promise<string> {
+        return await this.uploads.uploadFromDisk(localFilePath, options);
+    }
+
+    /**
+     * Uploads multiple local files to S3 in parallel.
+     * Gracefully logs and skips failed uploads without halting the entire batch.
+     * Automatically determines file names and stream types for each file.
+     * @param localFilePaths - Array of absolute or relative paths to local files.
+     * @param options - Optional settings including prefix and spanOptions.
+     * @returns A promise resolving to an object containing an array of failed file paths.
+     */
+    public async uploadMultipleFromDisk(
+        localFilePaths: string[],
+        options: UploadOptions = {}
+    ): Promise<UploadFilesReturnType> {
+        return await this.uploads.uploadMultipleFromDisk(
+            localFilePaths,
+            options
+        );
     }
 
     /**

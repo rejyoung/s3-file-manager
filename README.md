@@ -195,6 +195,8 @@ A custom tracing function that wraps internal operations in named spans for obse
 | `deleteFolder()`            | Delete all files in a given folder                         | prefix, options?                      | Promise\<DeleteFolderReturnType>     |
 | `uploadFile()`              | Upload a file to the bucket                                | file, options?                        | Promise\<void>                       |
 | `uploadMultipleFiles()`     | Upload multiple files to the bucket                        | files, options?                       | Promise\<string[]>                   |
+| `uploadFromDisk()`          | Upload a local file to the bucket                          | filePath, options?                    | Promise\<void>                       |
+| `uploadMultipleFromDisk()`  | Upload multiple local files to the bucket                  | filePaths, options?                   | Promise\<string[]>                   |
 | `getStream()`               | Fetch a readable stream of a file                          | filePath, options?                    | Promise\<Readable>                   |
 | `downloadFile()`            | Download a file to memory                                  | filePath, options?                    | Promise\<Buffer \| string \| object> |
 | `downloadToDisk()`          | Download a file to the disk                                | filePath, outDir, options?            | Promise\<void>                       |
@@ -547,6 +549,60 @@ await fm.uploadMultipleFiles([textFile, blobFile, streamFile], {
         - `ReadableStream` - web streams (e.g. from `fetch().body`)
     - `contentType` *(optional)* - MIME type of the file.
     - `sizeHintBytes` *(optional)* -  Expected size of the file. Providing this value avoids the need to calculate the size programmatically, improving performance.
+- `options` *(optional)* - An object of type `UploadOptions`. May include:
+    - `prefix` *(optional)* - Path to the folder (prefix) where the files should be added. If omitted, files will be uploaded to the root of the storage bucket.
+    - `spanOptions` *(optional)* - Tracing options (used only with `withSpan`; [learn more](#4-logging-and-tracing)).
+
+**Returns:**
+A promise resolving to an object of type `UploadFilesReturnType` with: 
+- `filePaths` - An array of strings representing the complete file paths for each successfully uploaded file.
+- `skippedFiles` - An array containing the names of all files whose uploads failed.
+
+> If the upload of a particular file fails, the method will not throw an error. Instead, the names of all files that failed to upload are returned.
+
+#### `uploadFromDisk()`
+```ts
+await fm.uploadFromDisk(
+    "/Users/John/Downloads/headshot.jpg",
+    {
+        prefix: "media-files/user-img/,
+    }
+    // "media-files/user-img/headshot.jpg"
+)
+```
+
+**Arguments:**
+- `filePath` - The file path to be uploaded
+- `options` *(optional)* - An object of type `UploadOptions`. May include:
+    - `prefix` *(optional)* - Path to the folder (prefix) where the file should be added. If omitted, the file will be uploaded to the root of the storage bucket.
+    - `spanOptions` *(optional)* - Tracing options (used only with `withSpan`; [learn more](#4-logging-and-tracing)).
+
+**Returns:**
+
+A promise resolving to a string containing the full path of the newly uploaded file.
+
+#### `uploadMultipleFromDisk()`
+```ts
+await fm.uploadMultipleFromDisk(
+    [
+    "/Users/John/Downloads/headshot.jpg", 
+    "/Users/John/Documents/resume.pdf", 
+    "/Users/John/Documents/cover-letter.pdf"
+    ], 
+    {
+        prefix: "uploads/mixed/"
+    }
+);
+/*
+    {
+        filePaths: ["uploads/mixed/headshot.jpg", "uploads/mixed/resume.pdf", "uploads/mixed/cover-letter.pdf"]
+        skippedFiles: []
+    }
+*/
+```
+
+**Arguments:**
+- `filesPaths` - An array of local file paths to be uploaded.
 - `options` *(optional)* - An object of type `UploadOptions`. May include:
     - `prefix` *(optional)* - Path to the folder (prefix) where the files should be added. If omitted, files will be uploaded to the root of the storage bucket.
     - `spanOptions` *(optional)* - Tracing options (used only with `withSpan`; [learn more](#4-logging-and-tracing)).

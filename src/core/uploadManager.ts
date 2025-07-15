@@ -16,6 +16,7 @@ import { isStreamType, StreamType } from "../utils/type-guards.js";
 import { lookup as mimeLookup } from "mime-types";
 import Bottleneck from "bottleneck";
 import path from "path";
+import fs from "fs";
 import { UploadFilesReturnType } from "../types/return-types.js";
 
 /**
@@ -149,10 +150,18 @@ export class UploadManager {
             await Promise.all(
                 files.map(async (file) => {
                     try {
+                        this.ctx.verboseLog(
+                            `Uploading file: ${file.name}`,
+                            "info"
+                        );
                         const result = await this.uploadFile(file, { prefix });
                         await mutex.schedule(async () => {
                             filePaths.push(result);
                         });
+                        this.ctx.verboseLog(
+                            `Successfully uploaded file: ${file.name}`,
+                            "info"
+                        );
                     } catch (error) {
                         await mutex.schedule(async () =>
                             skippedFiles.push(file.name)
@@ -180,8 +189,132 @@ export class UploadManager {
     }
 
     // ════════════════════════════════════════════════════════════════
+    // 📥 UPLOAD FROM DISK
+    // Uploads a single local file, using streaming or buffering based on size
+    // ════════════════════════════════════════════════════════════════
+    public async uploadFromDisk(
+        localFilePath: string,
+        options: UploadOptions = {}
+    ): Promise<string> {
+        const { spanOptions = {}, prefix } = options;
+
+        this.ctx.verboseLog(`Reading file from disk: ${localFilePath}`, "info");
+        const stats = fs.statSync(localFilePath);
+
+        const sizeInBytes = stats.size;
+        this.ctx.verboseLog(
+            sizeInBytes > this.ctx.maxUploadPartSize
+                ? `Using stream for upload: ${localFilePath}`
+                : `Buffering file for upload: ${localFilePath}`,
+            "info"
+        );
+
+        const fileName = path.basename(localFilePath);
+
+        const {
+            name: spanName = "S3FileManager.uploadFile",
+            attributes: spanAttributes = {
+                bucket: this.ctx.bucketName,
+                sourceFile: `${localFilePath}`,
+            },
+        } = spanOptions;
+
+        const result = await this.ctx.withSpan(
+            spanName,
+            spanAttributes,
+            async () => {
+                let content: Buffer | Readable;
+
+                if (sizeInBytes > this.ctx.maxUploadPartSize) {
+                    content = fs.createReadStream(localFilePath);
+                } else {
+                    content = fs.readFileSync(localFilePath);
+                }
+
+                const file: FilePayload = {
+                    name: fileName,
+                    content,
+                    sizeHintBytes: sizeInBytes,
+                };
+
+                return await this.uploadFile(file, {
+                    prefix,
+                    spanOptions: {
+                        name: "S3FileManager.uploadFromDisk > uploadFile",
+                        attributes: {
+                            bucket: this.ctx.bucketName,
+                            sourceFile: `${localFilePath}`,
+                        },
+                    },
+                });
+            }
+        );
+        return result;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // 📥 UPLOAD MULTIPLE FILES FROM DISK
+    // Uploads multiple local files, using streaming for all to minimize memory usage
+    // ════════════════════════════════════════════════════════════════
+    public async uploadMultipleFromDisk(
+        localFilePaths: string[],
+        options: UploadOptions = {}
+    ): Promise<UploadFilesReturnType> {
+        const { spanOptions = {}, prefix } = options;
+        const {
+            name: spanName = "S3FileManager.uploadFile",
+            attributes: spanAttributes = {
+                bucket: this.ctx.bucketName,
+                numberOfFiles: `${localFilePaths.length}`,
+            },
+        } = spanOptions;
+
+        const result = await this.ctx.withSpan(
+            spanName,
+            spanAttributes,
+            async () => {
+                const files = await Promise.all(
+                    localFilePaths.map(async (filePath) => {
+                        this.ctx.verboseLog(
+                            `Preparing file for upload: ${filePath}`,
+                            "info"
+                        );
+                        const stats = await fs.promises.stat(filePath);
+                        const sizeInBytes = stats.size;
+                        const fileName = path.basename(filePath);
+                        const content = fs.createReadStream(filePath);
+
+                        const file: FilePayload = {
+                            name: fileName,
+                            content,
+                            sizeHintBytes: sizeInBytes,
+                        };
+                        return file;
+                    })
+                );
+                this.ctx.verboseLog(
+                    `Prepared ${files.length} file(s) for upload`,
+                    "info"
+                );
+
+                return await this.uploadMultipleFiles(files, {
+                    prefix,
+                    spanOptions: {
+                        name: "S3FileManager.uploadMultipleFromDisk > uploadFile",
+                        attributes: {
+                            bucket: this.ctx.bucketName,
+                            numberOfFiles: `${localFilePaths.length}`,
+                        },
+                    },
+                });
+            }
+        );
+        return result;
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // 📤 SIMPLE UPLOAD
-    // Uploads small files in a single PUT request
+    // Uploads a small file in a single PUT request
     // ════════════════════════════════════════════════════════════════
 
     private async simpleUpload(

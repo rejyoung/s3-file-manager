@@ -3,7 +3,6 @@ import {
     VerifyFilesOptions,
     CopyFileOptions,
     DeleteFileOptions,
-    SpanOptions,
 } from "./input-types.js";
 
 export type UploadContentType =
