@@ -1,12 +1,5 @@
 import { _Error } from "@aws-sdk/client-s3";
 
-export interface DeleteReturnType {
-    success: boolean;
-    deleted: boolean;
-    filePath: string;
-    reason?: string;
-}
-
 export interface CopyReturnType {
     success: boolean;
     source: string;
@@ -40,9 +33,14 @@ export interface FileDeletionError {
     error: _Error;
 }
 
-export interface DownloadAllReturnType {
+export interface DownloadFolderReturnType {
     success: boolean;
     message: string;
     downloadedFiles: number;
     failedToDownload: string[];
+}
+
+export interface UploadFilesReturnType {
+    filePaths: string[];
+    skippedFiles: string[];
 }

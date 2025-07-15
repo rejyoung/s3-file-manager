@@ -9,8 +9,9 @@ import { ListItemsOptionsInternal } from "../types/internal-types.js";
 import { formatPrefix } from "../utils/formatPrefix.js";
 
 const MAX_ATTEMPTS_DEFAULT = 3;
-const MULTIPART_THRESHOLD_DEFAULT = 10 * 1024 * 1024;
-const MULTIPART_THRESHOLD_MIN = 5 * 1024 * 1024;
+const DEFAULT_UPLOAD_PART_SIZE = 10 * 1024 * 1024;
+const MIN_UPLOAD_PART_SIZE = 5 * 1024 * 1024;
+const MAX_UPLOAD_PART_SIZE = 100 * 1024 * 1024;
 
 /**
  ╔════════════════════════════════════════════════════════════════╗
@@ -25,7 +26,7 @@ export class S3FMContext {
     public readonly withSpan: WithSpanFn;
     public readonly maxAttempts: number;
     public readonly attemptNumString: string;
-    public readonly multipartThreshold: number;
+    public readonly maxUploadPartSize: number;
     public readonly allowVerboseLogging: boolean;
 
     constructor(config: FMConfig) {
@@ -33,7 +34,7 @@ export class S3FMContext {
 
         this.s3 = new S3Client({
             region: config.bucketRegion,
-            endpoint: config.endpoint ?? undefined,
+            endpoint: config.endpoint,
             credentials: config.credentials,
             forcePathStyle: config.forcePathStyle,
         });
@@ -50,11 +51,15 @@ export class S3FMContext {
             this.maxAttempts > 1 ? "s" : ""
         }`;
 
-        this.multipartThreshold =
-            config.multipartThreshold &&
-            config.multipartThreshold > MULTIPART_THRESHOLD_MIN
-                ? config.multipartThreshold
-                : MULTIPART_THRESHOLD_DEFAULT;
+        // Convert input maxUploadPartSizeMB to bytes or set to zero if undefined
+        const userMaxPartSize = config.maxUploadPartSizeMB
+            ? config.maxUploadPartSizeMB * 1024 * 1024
+            : 0;
+        this.maxUploadPartSize =
+            userMaxPartSize > MIN_UPLOAD_PART_SIZE &&
+            userMaxPartSize < MAX_UPLOAD_PART_SIZE
+                ? userMaxPartSize
+                : DEFAULT_UPLOAD_PART_SIZE;
 
         this.allowVerboseLogging = config.verboseLogging ?? false;
     }
@@ -65,10 +70,10 @@ export class S3FMContext {
     // ════════════════════════════════════════════════════════════════
 
     public async listItems(
+        prefix: string,
         options: ListItemsOptionsInternal
     ): Promise<string[]> {
         const {
-            prefix,
             filterFn = (fileName: string) => true,
             compareFn = undefined,
             directoriesOnly = false,
@@ -83,10 +88,9 @@ export class S3FMContext {
             Delimiter: directoriesOnly ? "/" : undefined,
         };
 
-        // Assert that spanName and spanAttributes exist, as they must be passed in by the two wrapper functions
         const result = await this.withSpan(
-            spanName!,
-            spanAttributes!,
+            spanName ?? "S3FileManager.listItems",
+            spanAttributes ?? { bucket: this.bucketName, prefix },
             async () => {
                 const filteredItems: string[] = [];
 
@@ -238,9 +242,11 @@ export class S3FMContext {
                 chunks.push(Buffer.from(value));
             }
             return Buffer.concat(chunks);
-        } else {
+        } else if (stream instanceof Blob) {
             const arrayBuffer = await (stream as Blob).arrayBuffer();
             return Buffer.from(arrayBuffer);
+        } else {
+            throw new Error("Unsupported stream type");
         }
     }
 }

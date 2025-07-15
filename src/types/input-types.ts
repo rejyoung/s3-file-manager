@@ -11,51 +11,43 @@ export interface BasicOptions {
     spanOptions?: SpanOptions;
 }
 
-export interface ListDirectoriesOptions
+export interface ListFoldersOptions
     extends Omit<ListItemsOptionsInternal, "directoriesOnly" | "spanOptions"> {
     spanOptions?: SpanOptions;
 }
-export interface ListFilesOptions extends ListDirectoriesOptions {}
+export interface ListFilesOptions extends ListFoldersOptions {}
 
-export interface ConfirmFilesOptions extends BasicOptions {
+export interface VerifyFilesOptions extends BasicOptions {
     prefix?: string;
 }
 
 export interface FilePayload {
     name: string;
     content: string | Buffer | Uint8Array | Blob | Readable | ReadableStream;
-}
-
-export interface BatchedFilePayload extends FilePayload {
-    contentType?: string;
-    sizeHint?: number;
+    contentType?: string; // mime-type
+    sizeHintBytes?: number;
 }
 
 export type Stream = Blob | Readable | ReadableStream;
 
-export interface FileUploadOptions extends BasicOptions {
+export interface UploadOptions extends BasicOptions {
     prefix?: string;
-    contentType?: string; // mime-type
-    sizeHint?: number;
 }
 
-export interface FileBatchUploadOptions
-    extends Omit<FileUploadOptions, "sizeHint"> {}
-
-export interface FileStreamOptions extends BasicOptions {
+export interface GetStreamOptions extends BasicOptions {
     timeoutMS?: number;
 }
 
-export interface LoadFileOptions extends BasicOptions {}
+export interface DownloadFileOptions extends BasicOptions {}
 export interface DownloadToDiskOptions extends BasicOptions {
     outputFilename?: string;
 }
 
-export interface DownloadLinkOptions extends BasicOptions {
+export interface GetDownloadUrlOptions extends BasicOptions {
     expiresInSec?: number;
 }
 
-export interface DownloadAllOptions extends BasicOptions {
+export interface DownloadFolderOptions extends BasicOptions {
     extensionOverride?: string;
 }
 
@@ -65,7 +57,7 @@ export interface CopyFileOptions extends BasicOptions {
 
 export interface MoveFileOptions extends CopyFileOptions {}
 
-export interface DeleteFileOptions extends CopyFileOptions {}
+export interface DeleteFileOptions extends BasicOptions {}
 
 export interface DeleteFolderOptions extends BasicOptions {}
 

@@ -8,18 +8,15 @@ import {
 } from "@aws-sdk/client-s3";
 import { Readable } from "stream";
 import { S3FMContext } from "./context.js";
-import {
-    BatchedFilePayload,
-    FilePayload,
-    FileUploadOptions,
-    Stream,
-} from "../types/input-types.js";
+import { FilePayload, UploadOptions, Stream } from "../types/input-types.js";
 import { UploadContentType } from "../types/internal-types.js";
 import { wait } from "../utils/wait.js";
 import { backoffDelay } from "../utils/wait.js";
 import { isStreamType, StreamType } from "../utils/type-guards.js";
 import { lookup as mimeLookup } from "mime-types";
 import Bottleneck from "bottleneck";
+import path from "path";
+import { UploadFilesReturnType } from "../types/return-types.js";
 
 /**
  ╔════════════════════════════════════════════════════════════════════════════════╗
@@ -45,9 +42,9 @@ export class UploadManager {
 
     public async uploadFile(
         file: FilePayload,
-        options: FileUploadOptions = {}
-    ): Promise<void> {
-        const { content } = file;
+        options: UploadOptions = {}
+    ): Promise<string> {
+        const { content, sizeHintBytes, contentType } = file;
         const { spanOptions = {}, prefix } = options;
 
         const {
@@ -58,97 +55,108 @@ export class UploadManager {
             },
         } = spanOptions;
 
-        await this.ctx.withSpan(spanName, spanAttributes, async () => {
-            let sizeInBytes: number | undefined;
-            let type: UploadContentType;
+        const result = await this.ctx.withSpan(
+            spanName,
+            spanAttributes,
+            async () => {
+                let sizeInBytes: number | undefined;
+                let type: UploadContentType;
 
-            if (typeof content === "string") {
-                sizeInBytes =
-                    options.sizeHint ?? Buffer.byteLength(content, "utf-8");
-                type = "string";
-            } else if (Buffer.isBuffer(content)) {
-                sizeInBytes = options.sizeHint ?? content.length;
-                type = "Buffer";
-            } else if (content instanceof Uint8Array) {
-                sizeInBytes = options.sizeHint ?? content.byteLength;
-                type = "Uint8Array";
-            } else if (typeof Blob !== "undefined" && content instanceof Blob) {
-                sizeInBytes = options.sizeHint ?? content.size;
-                type = "Blob";
-            } else if (content instanceof Readable) {
-                sizeInBytes = options.sizeHint ?? undefined;
-                type = "Readable";
-            } else {
-                sizeInBytes = options.sizeHint ?? undefined;
-                type = "ReadableStream";
-            }
+                if (typeof content === "string") {
+                    sizeInBytes =
+                        sizeHintBytes ?? Buffer.byteLength(content, "utf-8");
+                    type = "string";
+                } else if (Buffer.isBuffer(content)) {
+                    sizeInBytes = sizeHintBytes ?? content.length;
+                    type = "Buffer";
+                } else if (content instanceof Uint8Array) {
+                    sizeInBytes = sizeHintBytes ?? content.byteLength;
+                    type = "Uint8Array";
+                } else if (
+                    typeof Blob !== "undefined" &&
+                    content instanceof Blob
+                ) {
+                    sizeInBytes = sizeHintBytes ?? content.size;
+                    type = "Blob";
+                } else if (content instanceof Readable) {
+                    sizeInBytes = sizeHintBytes ?? undefined;
+                    type = "Readable";
+                } else {
+                    sizeInBytes = sizeHintBytes ?? undefined;
+                    type = "ReadableStream";
+                }
 
-            this.ctx.verboseLog(
-                `Uploading ${file.name} (${sizeInBytes} bytes) using ${
-                    sizeInBytes && sizeInBytes > this.ctx.multipartThreshold
-                        ? "multipart"
-                        : "simple"
-                } upload`
-            );
-
-            const mimeType =
-                options.contentType ??
-                (mimeLookup(file.name) || "application/octet-stream");
-
-            if (
-                sizeInBytes === undefined ||
-                sizeInBytes > this.ctx.multipartThreshold
-            ) {
-                await this.multipartUpload(
-                    file,
-                    type,
-                    mimeType,
-                    sizeInBytes,
-                    options.prefix
+                this.ctx.verboseLog(
+                    `Uploading ${file.name} (${sizeInBytes} bytes) using ${
+                        sizeInBytes && sizeInBytes > this.ctx.maxUploadPartSize
+                            ? "multipart"
+                            : "simple"
+                    } upload`
                 );
-            } else {
-                await this.simpleUpload(file, mimeType, options.prefix);
+
+                const mimeType =
+                    contentType ??
+                    (mimeLookup(file.name) || "application/octet-stream");
+
+                if (
+                    sizeInBytes === undefined ||
+                    sizeInBytes > this.ctx.maxUploadPartSize
+                ) {
+                    return await this.multipartUpload(
+                        file,
+                        type,
+                        mimeType,
+                        sizeInBytes,
+                        options.prefix
+                    );
+                } else {
+                    return await this.simpleUpload(
+                        file,
+                        mimeType,
+                        options.prefix
+                    );
+                }
             }
-        });
+        );
+        return result;
     }
 
     // ════════════════════════════════════════════════════════════════
-    // 📦 UPLOAD FILE BATCH
+    // 📦 UPLOAD MULTIPLE FILES
     // Iterates through arrays of files and uploads them with predefined concurrency limits
     // ════════════════════════════════════════════════════════════════
 
-    public async uploadFileBatch(
-        files: BatchedFilePayload[],
-        options: FileUploadOptions = {}
-    ): Promise<string[]> {
+    public async uploadMultipleFiles(
+        files: FilePayload[],
+        options: UploadOptions = {}
+    ): Promise<UploadFilesReturnType> {
+        // Limiter to prevent race conditions when pushing to skippedFiles and filePaths arrays.
+        const mutex = new Bottleneck({ maxConcurrent: 1 });
+
         const { spanOptions = {}, prefix } = options;
 
         const {
-            name: spanName = "S3FileManager.uploadFileBatch",
+            name: spanName = "S3FileManager.uploadMultipleFiles",
             attributes: spanAttributes = {
                 bucket: this.ctx.bucketName,
             },
         } = spanOptions;
 
         let skippedFiles: string[] = [];
+        let filePaths: string[] = [];
 
         await this.ctx.withSpan(spanName, spanAttributes, async () => {
             await Promise.all(
-                files.map(async (fileForUpload) => {
-                    const file: FilePayload = {
-                        name: fileForUpload.name,
-                        content: fileForUpload.content,
-                    };
-                    const uploadOptions: FileUploadOptions = {
-                        prefix,
-                        contentType:
-                            fileForUpload.contentType ?? options.contentType,
-                        sizeHint: fileForUpload.sizeHint,
-                    };
+                files.map(async (file) => {
                     try {
-                        await this.uploadFile(file, uploadOptions);
+                        const result = await this.uploadFile(file, { prefix });
+                        await mutex.schedule(async () => {
+                            filePaths.push(result);
+                        });
                     } catch (error) {
-                        skippedFiles.push(fileForUpload.name);
+                        await mutex.schedule(async () =>
+                            skippedFiles.push(file.name)
+                        );
                         this.ctx.verboseLog(String(error), "warn");
                         this.ctx.verboseLog("Skipping file...", "warn");
                     }
@@ -168,7 +176,7 @@ export class UploadManager {
             );
         }
 
-        return skippedFiles;
+        return { filePaths, skippedFiles };
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -180,11 +188,11 @@ export class UploadManager {
         file: FilePayload,
         mimeType: string,
         prefix?: string
-    ): Promise<void> {
+    ): Promise<string> {
         const key = `${prefix ?? ""}${file.name}`;
         let attempt = 0;
 
-        await this.ctx.withSpan(
+        const result = await this.ctx.withSpan(
             "S3FileManager.uploadFile > simpleUpload",
             {
                 bucket: this.ctx.bucketName,
@@ -206,7 +214,7 @@ export class UploadManager {
                         this.ctx.verboseLog(
                             `Successfully uploaded ${file.name}`
                         );
-                        return;
+                        return `${prefix ?? ""}${file.name}`;
                     } catch (error) {
                         this.ctx.handleRetryErrorLogging(
                             attempt,
@@ -220,6 +228,7 @@ export class UploadManager {
                 }
             }
         );
+        return result;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -233,7 +242,7 @@ export class UploadManager {
         mimeType: string,
         size?: number,
         prefix?: string
-    ): Promise<boolean> {
+    ): Promise<string> {
         let fileChunks: AsyncIterable<Buffer> | Buffer[];
         try {
             if (isStreamType(type) && (!size || size > 200 * 1024 * 1024)) {
@@ -329,7 +338,7 @@ export class UploadManager {
                         this.ctx.verboseLog(
                             `File ${filename} successfully uploaded to S3 bucket`
                         );
-                        return true;
+                        return `${prefix ?? ""}${file.name}`;
                     } catch (error) {
                         await this.ctx.s3.send(
                             new AbortMultipartUploadCommand({
@@ -415,9 +424,9 @@ export class UploadManager {
                     buffer,
                     Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
                 ]);
-                while (buffer.length >= this.ctx.multipartThreshold) {
-                    yield buffer.subarray(0, this.ctx.multipartThreshold);
-                    buffer = buffer.subarray(this.ctx.multipartThreshold);
+                while (buffer.length >= this.ctx.maxUploadPartSize) {
+                    yield buffer.subarray(0, this.ctx.maxUploadPartSize);
+                    buffer = buffer.subarray(this.ctx.maxUploadPartSize);
                 }
             }
             if (buffer.length) yield buffer;
@@ -431,9 +440,9 @@ export class UploadManager {
                 const { done, value } = await reader.read();
                 if (done) break;
                 buffer = Buffer.concat([buffer, Buffer.from(value)]);
-                while (buffer.length >= this.ctx.multipartThreshold) {
-                    yield buffer.subarray(0, this.ctx.multipartThreshold);
-                    buffer = buffer.subarray(this.ctx.multipartThreshold);
+                while (buffer.length >= this.ctx.maxUploadPartSize) {
+                    yield buffer.subarray(0, this.ctx.maxUploadPartSize);
+                    buffer = buffer.subarray(this.ctx.maxUploadPartSize);
                 }
             }
             if (buffer.length) yield buffer;
@@ -449,13 +458,13 @@ export class UploadManager {
         const bufferChunks: Buffer[] = [];
         const totalFileSize = buffer.length;
         const numberOfParts = Math.ceil(
-            totalFileSize / this.ctx.multipartThreshold
+            totalFileSize / this.ctx.maxUploadPartSize
         );
 
         for (let part = 1; part <= numberOfParts; part++) {
-            const start = (part - 1) * this.ctx.multipartThreshold;
+            const start = (part - 1) * this.ctx.maxUploadPartSize;
             const end = Math.min(
-                start + this.ctx.multipartThreshold,
+                start + this.ctx.maxUploadPartSize,
                 totalFileSize
             );
             const chunk = buffer.subarray(start, end);

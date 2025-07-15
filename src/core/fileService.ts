@@ -3,28 +3,25 @@ import {
     DeleteObjectCommand,
     DeleteObjectsCommand,
     HeadObjectCommand,
-    ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { S3FMContext } from "./context.js";
 import { backoffDelay, wait } from "../utils/wait.js";
 import {
     DeleteFolderOptions,
-    ListDirectoriesOptions,
+    ListFoldersOptions,
     ListFilesOptions,
     MoveFileOptions,
     RenameFileOptions,
 } from "../types/input-types.js";
 import path from "path";
 import {
-    ConfirmFilesOptionsInternal,
+    VerifyFilesOptionsInternal,
     CopyFileOptionsInternal,
     DeleteFileOptionsInternal,
-    ListItemsOptionsInternal,
 } from "../types/internal-types.js";
 import {
     CopyReturnType,
     DeleteFolderReturnType,
-    DeleteReturnType,
     FileDeletionError,
     MoveReturnType,
     RenameReturnType,
@@ -49,26 +46,25 @@ export class FileService {
     // 📁 LIST DIRECTORIES
     // Lists all directories (common prefixes) from a specified prefix
     // ════════════════════════════════════════════════════════════════
-    public async listDirectories(
-        options: ListDirectoriesOptions = {}
+    public async listFolders(
+        prefix: string,
+        options: ListFoldersOptions = {}
     ): Promise<string[]> {
         const {
-            prefix,
             filterFn = (fileName: string) => true,
             compareFn = undefined,
             spanOptions = {},
         } = options;
 
         const {
-            name: spanName = "S3FileManager.listDirectories",
+            name: spanName = "S3FileManager.listFolders",
             attributes: spanAttributes = {
                 bucket: this.ctx.bucketName,
                 prefix: prefix ?? "",
             },
         } = spanOptions;
 
-        return await this.ctx.listItems({
-            prefix,
+        return await this.ctx.listItems(prefix, {
             filterFn,
             compareFn,
             directoriesOnly: true,
@@ -80,9 +76,11 @@ export class FileService {
     // 📄 LIST FILES
     // Lists all files (excluding directories) from a specified prefix
     // ════════════════════════════════════════════════════════════════
-    public async listFiles(options: ListFilesOptions = {}): Promise<string[]> {
+    public async listFiles(
+        prefix: string,
+        options: ListFilesOptions = {}
+    ): Promise<string[]> {
         const {
-            prefix,
             filterFn = (fileName: string) => true,
             compareFn = undefined,
             spanOptions = {},
@@ -96,8 +94,7 @@ export class FileService {
             },
         } = spanOptions;
 
-        return await this.ctx.listItems({
-            prefix,
+        return await this.ctx.listItems(prefix, {
             filterFn,
             compareFn,
             spanOptions: { name: spanName, attributes: spanAttributes },
@@ -108,9 +105,9 @@ export class FileService {
     // ✅ CONFIRM FILE EXISTENCE
     // Verifies the presence of specified files in the S3 bucket using HeadObject
     // ════════════════════════════════════════════════════════════════
-    public async confirmFilesExist(
+    public async verifyFilesExist(
         filenames: string[],
-        options: ConfirmFilesOptionsInternal = {}
+        options: VerifyFilesOptionsInternal = {}
     ): Promise<string[]> {
         const { prefix, spanOptions = {}, bucketName } = options;
 
@@ -119,7 +116,7 @@ export class FileService {
         await Promise.all(
             filenames.map(async (filename) => {
                 const {
-                    name: spanName = "S3FileManager.confirmFilesExist",
+                    name: spanName = "S3FileManager.verifyFilesExist",
                     attributes: spanAttributes = {
                         bucket: bucketName ?? this.ctx.bucketName,
                         filename: `${prefix ?? ""}${filename}`,
@@ -287,9 +284,9 @@ export class FileService {
                         `File ${filePath} successfully copied to ${destinationPrefix}.`
                     );
 
-                    const { success: deleteSuccess } = await this.deleteFile(
-                        filePath,
-                        {
+                    let deleteSuccess = true;
+                    try {
+                        await this.deleteFile(filePath, {
                             ...options,
                             sourceBucketName,
                             spanOptions: {
@@ -300,8 +297,10 @@ export class FileService {
                                         sourceBucketName ?? this.ctx.bucketName,
                                 },
                             },
-                        }
-                    );
+                        });
+                    } catch (error) {
+                        deleteSuccess = false;
+                    }
 
                     const trimmedFilename = path.posix
                         .basename(filePath)
@@ -368,18 +367,24 @@ export class FileService {
                     `Successfully copied file ${filePath} to same location with new name ${newFilename}.`
                 );
 
-                const { success: deleteSuccess } = await this.deleteFile(
-                    filePath,
-                    {
+                let deleteSuccess = true;
+                try {
+                    await this.deleteFile(filePath, {
                         spanOptions: {
                             name: "S3FileManager.renameFile > deleteFile",
                             attributes: { oldFile: filePath },
                         },
-                    }
-                );
-                this.ctx.verboseLog(
-                    `Successfully deleted original copy of ${filePath} with old name.`
-                );
+                    });
+                    this.ctx.verboseLog(
+                        `Successfully deleted original copy of ${filePath} with old name.`
+                    );
+                } catch (error) {
+                    deleteSuccess = false;
+                    this.ctx.verboseLog(
+                        `Unable to delete original copy of ${filePath} with old name.`,
+                        "warn"
+                    );
+                }
 
                 return {
                     success: true,
@@ -399,7 +404,7 @@ export class FileService {
     public async deleteFile(
         filePath: string,
         options: DeleteFileOptionsInternal = {}
-    ): Promise<DeleteReturnType> {
+    ): Promise<void> {
         const { spanOptions = {}, sourceBucketName } = options;
 
         const {
@@ -410,62 +415,46 @@ export class FileService {
             },
         } = spanOptions;
 
-        const result = await this.ctx.withSpan(
-            spanName,
-            spanAttributes,
-            async () => {
-                let attempt = 0;
-                while (true) {
-                    try {
-                        attempt++;
-                        const command = new DeleteObjectCommand({
-                            Bucket: sourceBucketName ?? this.ctx.bucketName,
-                            Key: filePath,
-                        });
+        await this.ctx.withSpan(spanName, spanAttributes, async () => {
+            let attempt = 0;
+            while (true) {
+                try {
+                    attempt++;
+                    const command = new DeleteObjectCommand({
+                        Bucket: sourceBucketName ?? this.ctx.bucketName,
+                        Key: filePath,
+                    });
 
-                        await this.ctx.s3.send(command);
+                    await this.ctx.s3.send(command);
 
-                        this.ctx.logger.info(
-                            `Successfully deleted file: ${
+                    this.ctx.logger.info(
+                        `Successfully deleted file: ${
+                            sourceBucketName ? sourceBucketName + "/" : ""
+                        }${filePath}`
+                    );
+                    break;
+                } catch (error: any) {
+                    if (error.name === "NoSuchKey") {
+                        this.ctx.verboseLog(
+                            `File ${
                                 sourceBucketName ? sourceBucketName + "/" : ""
-                            }${filePath}`
+                            }${filePath} not found, nothing to delete`,
+                            "warn"
                         );
-                        return {
-                            success: true,
-                            deleted: true,
-                            filePath: filePath,
-                        };
-                    } catch (error: any) {
-                        if (error.name === "NoSuchKey") {
-                            this.ctx.logger.warn(
-                                `File ${
-                                    sourceBucketName
-                                        ? sourceBucketName + "/"
-                                        : ""
-                                }${filePath} not found, nothing to delete`
-                            );
-                            return {
-                                success: false,
-                                deleted: false,
-                                filePath,
-                                reason: "File not found",
-                            };
-                        }
-
-                        this.ctx.handleRetryErrorLogging(
-                            attempt,
-                            `to delete file ${
-                                sourceBucketName ? sourceBucketName + "/" : ""
-                            }${filePath}`,
-                            error
-                        );
-                        await wait(backoffDelay(attempt));
+                        return;
                     }
+
+                    this.ctx.handleRetryErrorLogging(
+                        attempt,
+                        `to delete file ${
+                            sourceBucketName ? sourceBucketName + "/" : ""
+                        }${filePath}`,
+                        error
+                    );
+                    await wait(backoffDelay(attempt));
                 }
             }
-        );
-
-        return result;
+        });
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -475,7 +464,7 @@ export class FileService {
 
     public async deleteFolder(
         prefix: string,
-        options: DeleteFolderOptions
+        options: DeleteFolderOptions = {}
     ): Promise<DeleteFolderReturnType> {
         const { spanOptions = {} } = options;
 
@@ -492,13 +481,22 @@ export class FileService {
             spanAttributes,
             async () => {
                 try {
-                    const filePaths = await this.listFiles({
-                        prefix,
+                    const filePaths = await this.listFiles(prefix, {
                         spanOptions: {
                             name: "S3FileManager.deleteFolder > listFiles",
                             attributes: spanAttributes,
                         },
                     });
+
+                    if (filePaths.length === 0) {
+                        return {
+                            success: true,
+                            message: `Folder ${prefix} did not exist, so there was nothing to delete.`,
+                            failed: 0,
+                            succeeded: 0,
+                            fileDeletionErrors: [],
+                        };
+                    }
 
                     const { succeeded, fileDeletionErrors } =
                         await this.deleteObjects(

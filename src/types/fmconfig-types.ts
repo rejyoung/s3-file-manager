@@ -7,7 +7,7 @@ export interface FMConfig {
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
     forcePathStyle?: boolean;
     maxAttempts?: number;
-    multipartThreshold?: number;
+    maxUploadPartSizeMB?: number;
     logger?: Logger;
     verboseLogging?: boolean;
     withSpan?: WithSpanFn;

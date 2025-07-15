@@ -1,6 +1,6 @@
 import {
     BasicOptions,
-    ConfirmFilesOptions,
+    VerifyFilesOptions,
     CopyFileOptions,
     DeleteFileOptions,
     SpanOptions,
@@ -32,7 +32,7 @@ export interface CopyFileOptionsInternal extends CopyFileOptions {
     newFilename?: string;
 }
 
-export interface ConfirmFilesOptionsInternal extends ConfirmFilesOptions {
+export interface VerifyFilesOptionsInternal extends VerifyFilesOptions {
     bucketName?: string;
 }
 
@@ -41,7 +41,6 @@ export interface DeleteFileOptionsInternal extends DeleteFileOptions {
 }
 
 export interface ListItemsOptionsInternal extends BasicOptions {
-    prefix?: string;
     filterFn?: (filename: string) => boolean;
     compareFn?: (a: string, b: string) => number;
     directoriesOnly?: boolean;

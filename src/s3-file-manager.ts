@@ -1,16 +1,18 @@
 import { FMConfig } from "./types/fmconfig-types.js";
 import {
-    BatchedFilePayload,
-    ConfirmFilesOptions,
+    VerifyFilesOptions,
     CopyFileOptions,
     DeleteFileOptions,
+    DeleteFolderOptions,
+    DownloadFolderOptions,
+    GetDownloadUrlOptions,
     DownloadToDiskOptions,
     FilePayload,
-    FileStreamOptions,
-    FileUploadOptions,
-    ListDirectoriesOptions,
+    GetStreamOptions,
+    UploadOptions,
+    ListFoldersOptions,
     ListFilesOptions,
-    LoadFileOptions,
+    DownloadFileOptions,
     MoveFileOptions,
     RenameFileOptions,
 } from "./types/input-types.js";
@@ -21,9 +23,11 @@ import { DownloadManager } from "./core/downloadManager.js";
 import { Readable } from "stream";
 import {
     CopyReturnType,
-    DeleteReturnType,
+    DeleteFolderReturnType,
+    DownloadFolderReturnType,
     MoveReturnType,
     RenameReturnType,
+    UploadFilesReturnType,
 } from "./types/return-types.js";
 
 /**
@@ -52,114 +56,78 @@ export class S3FileManager {
     }
 
     /**
+ ╔════════════════════════════════════════════════════════════════════════════════╗
+ ║ 🧾 FILE SERVICE                                                                ║
+ ║ Public-facing interface for loading, saving, or transferring file data         ║
+ ║ through the S3 storage layer. Orchestrates upload/download logic.              ║
+ ╚════════════════════════════════════════════════════════════════════════════════╝
+ */
+
+    /**
      * Lists all files in the S3 bucket or under a given prefix in the S3 bucket.
-     * @param options - Optional settings including prefix and tracing span settings.
+     * @param prefix - The S3 prefix under which to search
+     * @param options - Optional settings including filter and compare functions and tracing span settings.
      * If prefix is not supplied, all file paths in bucket are listed.
      * @returns A promise resolving to an array of file paths.
      */
-    public async listFiles(options?: ListFilesOptions): Promise<string[]> {
-        return this.services.listFiles(options);
+    public async listFiles(
+        prefix: string,
+        options?: ListFilesOptions
+    ): Promise<string[]> {
+        return this.services.listFiles(prefix, options);
     }
 
     /**
      * Lists all directories (common prefixes) in the S3 bucket or within a given prefix in the S3 bucket.
-     *
-     * @param options - Optional settings including prefix and tracing span settings.
+     * @param prefix - The S3 prefix under which to search
+     * @param options - Optional settings including filter and compare functions and tracing span settings.
      * If prefix is not supplied, all directories in bucket are listed.
      * @returns Promise resolving to an array of directory names (prefixes).
      */
-    public async listDirectories(
-        options?: ListDirectoriesOptions
+    public async listFolders(
+        prefix: string,
+        options?: ListFoldersOptions
     ): Promise<string[]> {
-        return this.services.listDirectories(options);
+        return this.services.listFolders(prefix, options);
     }
 
     /**
-     * Confirms the existence of multiple files in the S3 bucket.
+     * Verifies the existence of multiple files in the S3 bucket.
      * @param filePaths - An array of S3 file paths to check.
      * @param options - Optional settings including prefix and tracing span settings.
      * @returns A promise resolving to an array of missing file paths.
      */
-    public async confirmFilesExist(
+    public async verifyFilesExist(
         filenames: string[],
-        options?: ConfirmFilesOptions
+        options?: VerifyFilesOptions
     ): Promise<string[]> {
         if (options) {
             delete (options as any).bucketName;
         }
-        return this.services.confirmFilesExist(filenames, options);
+        return this.services.verifyFilesExist(filenames, options);
     }
 
     /**
-     * Uploads a file to the configured S3 bucket.
-     * Automatically chooses between single and multipart upload based on size.
-     * @param file - Object containing file name and content (Buffer or Readable).
-     * @param options - Optional settings including prefix, content type, and size hint.
-     * @returns A promise that resolves when the file is successfully uploaded.
+     * Copies a file from one location to another within the same bucket or from a different bucket to the current bucket.
+     * Optionally allows renaming the file during the copy operation.
+     * @param filePath - Path to the file in the bucket to copy.
+     * @param destinationPrefix - The prefix to copy the file to.
+     * @param options - Optional settings including source bucket name and tracing span settings.
+     * @returns A promise resolving to a CopyReturnType object indicating success, source path, and destination path.
      */
-
-    public async uploadFile(
-        file: FilePayload,
-        options?: FileUploadOptions
-    ): Promise<void> {
-        return await this.uploads.uploadFile(file, options);
-    }
-
-    /**
-     * Uploads multiple files concurrently to S3.
-     * Gracefully logs and skips failed uploads without halting the entire batch.
-     * @param files - Array of file objects to upload.
-     * @param options - Optional settings including prefix and content type.
-     * @returns A promise resolving to a list of files that failed to upload.
-     */
-
-    public async uploadFileBatch(
-        files: BatchedFilePayload[],
-        options?: FileUploadOptions
-    ): Promise<string[]> {
-        return await this.uploads.uploadFileBatch(files, options);
-    }
-
-    /**
-     * Streams a file from the S3 bucket using a readable stream.
-     * @param filePath - Path to the file in the bucket.
-     * @param options - Optional settings including custom timeout duration and tracing options.
-     * @returns A readable stream of the file's contents.
-     */
-    public async streamFile(
+    public async copyFile(
         filePath: string,
-        options?: FileStreamOptions
-    ): Promise<Readable> {
-        return await this.downloads.streamFile(filePath, options);
-    }
-
-    /**
-     * Loads a file's contents into memory as a string, Buffer, or parsed object depending on type.
-     * @param filePath - Path to the file in the bucket.
-     * @param options - Optional tracing span settings.
-     * @returns The file's contents as a string, object, or Buffer.
-     */
-    public async loadFile(
-        filePath: string,
-        options?: LoadFileOptions
-    ): Promise<string | Buffer | object> {
-        return await this.downloads.loadFile(filePath, options);
-    }
-
-    /**
-     * Downloads a file from S3 and saves it to a specified location on disk.
-     * Determines file name and extension based on S3 metadata or user overrides.
-     * @param filePath - Path to the file in the bucket.
-     * @param outDir - Path to folder in which to save the file.
-     * @param options - Optional output filename override and tracing span settings.
-     * @returns A promise resolving to the full local path of the saved file.
-     */
-    public async downloadToDisk(
-        filePath: string,
-        outDir: string,
-        options?: DownloadToDiskOptions
-    ): Promise<void> {
-        return await this.downloadToDisk(filePath, outDir, options);
+        destinationPrefix: string,
+        options?: CopyFileOptions
+    ): Promise<CopyReturnType> {
+        if (options) {
+            delete (options as any).newFilename;
+        }
+        return await this.services.copyFile(
+            filePath,
+            destinationPrefix,
+            options
+        );
     }
 
     /**
@@ -199,29 +167,6 @@ export class S3FileManager {
     }
 
     /**
-     * Copies a file from one location to another within the same bucket or from a different bucket to the current bucket.
-     * Optionally allows renaming the file during the copy operation.
-     * @param filePath - Path to the file in the bucket to copy.
-     * @param destinationPrefix - The prefix to copy the file to.
-     * @param options - Optional settings including source bucket name and tracing span settings.
-     * @returns A promise resolving to a CopyReturnType object indicating success, source path, and destination path.
-     */
-    public async copyFile(
-        filePath: string,
-        destinationPrefix: string,
-        options?: CopyFileOptions
-    ): Promise<CopyReturnType> {
-        if (options) {
-            delete (options as any).newFilename;
-        }
-        return await this.services.copyFile(
-            filePath,
-            destinationPrefix,
-            options
-        );
-    }
-
-    /**
      * Deletes a file from the S3 bucket. Handles missing files gracefully.
      * @param filePath - Path to the file in the bucket to delete.
      * @param options - Optional tracing span settings.
@@ -230,11 +175,155 @@ export class S3FileManager {
     public async deleteFile(
         filePath: string,
         options?: DeleteFileOptions
-    ): Promise<DeleteReturnType> {
+    ): Promise<void> {
         if (options) {
             delete (options as any).bucketName;
         }
 
         return await this.services.deleteFile(filePath, options);
+    }
+
+    /**
+     * Deletes all objects under the given prefix (folder) in the S3 bucket.
+     *
+     * @param prefix - The S3 key prefix representing the folder to delete.
+     * @param options - Optional settings including tracing span options.
+     * @returns A promise resolving to a DeleteFolderReturnType object containing:
+     *   - success: boolean indicating if the folder deletion succeeded.
+     *   - failed: number of objects that failed to delete.
+     *   - succeeded: number of objects successfully deleted.
+     *   - fileDeletionErrors: array of error details for any failed deletions.
+     */
+    public async deleteFolder(
+        prefix: string,
+        options?: DeleteFolderOptions
+    ): Promise<DeleteFolderReturnType> {
+        return await this.services.deleteFolder(prefix, options);
+    }
+
+    /**
+ ╔════════════════════════════════════════════════════════════════════════════════╗
+ ║ 📤 UPLOAD MANAGER                                                              ║
+ ║ Handles file uploads to S3, including direct uploads, multipart uploads, and   ║
+ ║ retry logic for reliability.                                                   ║
+ ╚════════════════════════════════════════════════════════════════════════════════╝
+ */
+
+    /**
+     * Uploads a file to the configured S3 bucket.
+     * Automatically chooses between single and multipart upload based on size.
+     * @param file - Object containing file name and content (Buffer or Readable).
+     * @param options - Optional settings including prefix, content type, and size hint.
+     * @returns A promise that resolves when the file is successfully uploaded.
+     */
+
+    public async uploadFile(
+        file: FilePayload,
+        options?: UploadOptions
+    ): Promise<string> {
+        return await this.uploads.uploadFile(file, options);
+    }
+
+    /**
+     * Uploads multiple files concurrently to S3.
+     * Gracefully logs and skips failed uploads without halting the entire batch.
+     * @param files - Array of file objects to upload.
+     * @param options - Optional settings including prefix and content type.
+     * @returns A promise resolving to a list of files that failed to upload.
+     */
+
+    public async uploadMultipleFiles(
+        files: FilePayload[],
+        options?: UploadOptions
+    ): Promise<UploadFilesReturnType> {
+        return await this.uploads.uploadMultipleFiles(files, options);
+    }
+
+    /**
+ ╔════════════════════════════════════════════════════════════════════════════════╗
+ ║ 📥 DOWNLOAD MANAGER                                                            ║
+ ║ Manages downloads from S3, supporting buffered and streamed file retrieval,    ║
+ ║ with support for metadata extraction and type detection.                       ║
+ ╚════════════════════════════════════════════════════════════════════════════════╝
+ */
+
+    /**
+     * Streams a file from the S3 bucket using a readable stream.
+     * @param filePath - Path to the file in the bucket.
+     * @param options - Optional settings including custom timeout duration and tracing options.
+     * @returns A readable stream of the file's contents.
+     */
+    public async getStream(
+        filePath: string,
+        options?: GetStreamOptions
+    ): Promise<Readable> {
+        return await this.downloads.getStream(filePath, options);
+    }
+
+    /**
+     * Loads a file's contents into memory as a string, Buffer, or parsed object depending on type.
+     * @param filePath - Path to the file in the bucket.
+     * @param options - Optional tracing span settings.
+     * @returns The file's contents as a string, object, or Buffer.
+     */
+    public async downloadFile(
+        filePath: string,
+        options?: DownloadFileOptions
+    ): Promise<string | Buffer | object> {
+        return await this.downloads.downloadFile(filePath, options);
+    }
+
+    /**
+     * Downloads a file from S3 and saves it to a specified location on disk.
+     * Determines file name and extension based on S3 metadata or user overrides.
+     * @param filePath - Path to the file in the bucket.
+     * @param outDir - Path to folder in which to save the file.
+     * @param options - Optional output filename override and tracing span settings.
+     * @returns A promise that resolves when the file is successfully uploaded.
+     */
+    public async downloadToDisk(
+        filePath: string,
+        outDir: string,
+        options?: DownloadToDiskOptions
+    ): Promise<void> {
+        return await this.downloads.downloadToDisk(filePath, outDir, options);
+    }
+
+    /**
+     * Downloads all files in the S3 bucket with the specified prefix to a local directory.
+     *
+     * @param prefix - The S3 key prefix to filter which files to download.
+     * @param outDir - The local directory path where files will be saved.
+     * @param options - Optional settings, including tracing span options.
+     * @returns A promise that resolves to a DownloadFolderReturnType object containing:
+     *   - success: boolean indicating if all required downloads succeeded (true if at least some files downloaded without all failing).
+     *   - message: descriptive status message.
+     *   - downloadedFiles: number of files successfully downloaded.
+     *   - failedToDownload: array of file paths that failed to download.
+     */
+    public async downloadFolderToDisk(
+        prefix: string,
+        outDir: string,
+        options?: DownloadFolderOptions
+    ): Promise<DownloadFolderReturnType> {
+        return await this.downloads.downloadFolderToDisk(
+            prefix,
+            outDir,
+            options
+        );
+    }
+
+    /**
+     * Generates a presigned URL for temporary access to a file in S3.
+     *
+     * @param filePath - The S3 key (path) of the file for which to generate a link.
+     * @param options - Optional settings including expiresInSec (expiration time in seconds) and tracing span options.
+     * @returns A promise that resolves to a string containing the presigned URL.
+     */
+    public async getTemporaryDownloadUrl(
+        filePath: string,
+        options?: GetDownloadUrlOptions
+    ): Promise<string> {
+        return await this.downloads.getTemporaryDownloadUrl(filePath, options);
     }
 }
