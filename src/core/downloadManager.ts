@@ -156,11 +156,21 @@ export class DownloadManager {
                         const fileBuffer: Buffer =
                             await this.ctx.streamToBuffer(stream, "Readable");
 
+                        this.ctx.verboseLog(
+                            `Downloaded stream into buffer for ${filePath}`,
+                            "info"
+                        );
+
                         const fileFormat = await this.getFileFormat({
                             filePath,
                             callerName: "S3FileManager.downloadFile",
                         });
                         const returnType = fileFormat.fileType;
+
+                        this.ctx.verboseLog(
+                            `Parsed ${filePath} as ${returnType}`,
+                            "info"
+                        );
 
                         switch (returnType) {
                             case "text":
@@ -246,8 +256,16 @@ export class DownloadManager {
             await mkdir(outDir, { recursive: true });
 
             if (fileBuffer) {
+                this.ctx.verboseLog(
+                    `Preparing to write file ${filePath} to ${outDir}`,
+                    "info"
+                );
                 await writeFile(destinationPath, fileBuffer);
             } else {
+                this.ctx.verboseLog(
+                    `Streaming large file ${filePath} directly to disk`,
+                    "info"
+                );
                 await pipeline(stream, createWriteStream(destinationPath));
             }
 
@@ -301,6 +319,10 @@ export class DownloadManager {
                 const smallestFolder = path.basename(trimmedPrefix);
                 const outPath = path.join(outDir, smallestFolder);
 
+                this.ctx.verboseLog(
+                    `Downloading ${filesToDownload.length} files to ${outDir}`,
+                    "info"
+                );
                 const result = await Promise.all(
                     filesToDownload.map(async (file) => {
                         // Construct out directory (adjustedOutDir) for specific files to preserve internal file structure
@@ -314,6 +336,11 @@ export class DownloadManager {
                         const adjustedOutDir = path.join(
                             outPath,
                             relativeFolder
+                        );
+
+                        this.ctx.verboseLog(
+                            `Starting download for ${file}`,
+                            "info"
                         );
                         try {
                             await this.limiter.schedule(() =>
@@ -409,6 +436,10 @@ export class DownloadManager {
                             {
                                 expiresIn: expiresInSec,
                             }
+                        );
+                        this.ctx.verboseLog(
+                            `Generated temporary download URL for ${filePath}`,
+                            "info"
                         );
                         return signedUrl;
                     } catch (error) {

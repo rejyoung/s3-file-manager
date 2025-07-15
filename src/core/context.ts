@@ -62,6 +62,12 @@ export class S3FMContext {
                 : DEFAULT_UPLOAD_PART_SIZE;
 
         this.allowVerboseLogging = config.verboseLogging ?? false;
+        if (this.allowVerboseLogging) {
+            this.verboseLog(
+                `Initialized S3FMContext for bucket "${this.bucketName}" with maxAttempts=${this.maxAttempts}, maxUploadPartSize=${this.maxUploadPartSize}`,
+                "info"
+            );
+        }
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -92,6 +98,13 @@ export class S3FMContext {
             spanName ?? "S3FileManager.listItems",
             spanAttributes ?? { bucket: this.bucketName, prefix },
             async () => {
+                this.verboseLog(
+                    `Listing ${
+                        directoriesOnly ? "directories" : "files"
+                    } with prefix: ${params.Prefix ?? "(none)"}`,
+                    "info"
+                );
+
                 const filteredItems: string[] = [];
 
                 let continuationToken: string | undefined = undefined;
@@ -104,6 +117,14 @@ export class S3FMContext {
                             attempt++;
                             const command = new ListObjectsV2Command(params);
                             response = await this.s3.send(command);
+                            this.verboseLog(
+                                `Fetched ${
+                                    directoriesOnly
+                                        ? response.CommonPrefixes?.length ?? 0
+                                        : response.Contents?.length ?? 0
+                                } item(s) in this page`,
+                                "info"
+                            );
                             break;
                         } catch (error) {
                             this.handleRetryErrorLogging(
@@ -133,6 +154,12 @@ export class S3FMContext {
 
                     filteredItems.push(...items);
                     continuationToken = response.NextContinuationToken;
+                    if (continuationToken) {
+                        this.verboseLog(
+                            `Continuing to next page of results with token`,
+                            "info"
+                        );
+                    }
                     (params as any).ContinuationToken = continuationToken;
                 } while (continuationToken);
 
@@ -150,6 +177,10 @@ export class S3FMContext {
 
                 return sortedItems;
             }
+        );
+        this.verboseLog(
+            `Found ${result.length} item(s) under prefix "${prefix}"`,
+            "info"
         );
         return result;
     }
@@ -226,6 +257,10 @@ export class S3FMContext {
         stream: Stream,
         type: StreamType
     ): Promise<Buffer> {
+        this.verboseLog(
+            `Converting stream of type "${type}" to buffer`,
+            "info"
+        );
         const chunks: Buffer[] = [];
         if (type === "Readable") {
             for await (const chunk of stream as Readable) {
@@ -246,6 +281,10 @@ export class S3FMContext {
             const arrayBuffer = await (stream as Blob).arrayBuffer();
             return Buffer.from(arrayBuffer);
         } else {
+            this.verboseLog(
+                "Received unsupported stream type for buffer conversion",
+                "error"
+            );
             throw new Error("Unsupported stream type");
         }
     }

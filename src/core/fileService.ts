@@ -113,6 +113,10 @@ export class FileService {
 
         const missingFiles: string[] = [];
 
+        this.ctx.verboseLog(
+            `Verifying existence of ${filenames.length} file(s)...`,
+            "info"
+        );
         await Promise.all(
             filenames.map(async (filename) => {
                 const {
@@ -217,12 +221,20 @@ export class FileService {
                 while (true) {
                     try {
                         attempt++;
+                        this.ctx.verboseLog(
+                            `Attempting to copy from ${sourcePath} to ${destinationPath}`,
+                            "info"
+                        );
                         await this.ctx.s3.send(
                             new CopyObjectCommand({
                                 Bucket: this.ctx.bucketName,
                                 CopySource: sourcePath,
                                 Key: destinationPath,
                             })
+                        );
+                        this.ctx.verboseLog(
+                            `Successfully copied ${sourcePath} to ${destinationPath}`,
+                            "info"
                         );
                         return {
                             success: true,
@@ -267,6 +279,11 @@ export class FileService {
                 destinationPrefix,
             },
         } = spanOptions;
+
+        this.ctx.verboseLog(
+            `Starting move operation from ${filePath} to ${destinationPrefix}`,
+            "info"
+        );
 
         const result = await this.ctx.withSpan(
             spanName,
@@ -345,6 +362,8 @@ export class FileService {
                 newFilename,
             },
         } = spanOptions;
+
+        this.ctx.verboseLog(`Renaming ${filePath} to ${newFilename}`, "info");
 
         const result = await this.ctx.withSpan(
             spanName,
@@ -481,6 +500,10 @@ export class FileService {
             spanAttributes,
             async () => {
                 try {
+                    this.ctx.verboseLog(
+                        `Gathering files to delete from folder: ${prefix}`,
+                        "info"
+                    );
                     const filePaths = await this.listFiles(prefix, {
                         spanOptions: {
                             name: "S3FileManager.deleteFolder > listFiles",
@@ -497,6 +520,11 @@ export class FileService {
                             fileDeletionErrors: [],
                         };
                     }
+
+                    this.ctx.verboseLog(
+                        `Found ${filePaths.length} file(s) in folder ${prefix}`,
+                        "info"
+                    );
 
                     const { succeeded, fileDeletionErrors } =
                         await this.deleteObjects(
@@ -571,6 +599,10 @@ export class FileService {
                         filePathBatch.length === 1000 ||
                         i === filePaths.length - 1
                     ) {
+                        this.ctx.verboseLog(
+                            `Attempting batch delete of ${filePathBatch.length} object(s)`,
+                            "info"
+                        );
                         const command = new DeleteObjectsCommand({
                             Bucket: this.ctx.bucketName,
                             Delete: {
@@ -602,6 +634,12 @@ export class FileService {
                                     });
                                 });
 
+                                this.ctx.verboseLog(
+                                    `Batch delete successful: ${
+                                        Deleted?.length ?? 0
+                                    } item(s) deleted`,
+                                    "info"
+                                );
                                 succeeded += Deleted?.length ?? 0;
                                 filePathBatch = [];
                                 break;
