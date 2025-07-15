@@ -195,8 +195,8 @@ A custom tracing function that wraps internal operations in named spans for obse
 | `deleteFolder()`            | Delete all files in a given folder                         | prefix, options?                      | Promise\<DeleteFolderReturnType>     |
 | `uploadFile()`              | Upload a file to the bucket                                | file, options?                        | Promise\<void>                       |
 | `uploadMultipleFiles()`     | Upload multiple files to the bucket                        | files, options?                       | Promise\<string[]>                   |
-| `uploadFromDisk()`          | Upload a local file to the bucket                          | filePath, options?                    | Promise\<void>                       |
-| `uploadMultipleFromDisk()`  | Upload multiple local files to the bucket                  | filePaths, options?                   | Promise\<string[]>                   |
+| `uploadFromDisk()`          | Upload a file on local disk to the bucket                  | filePath, options?                    | Promise\<void>                       |
+| `uploadMultipleFromDisk()`  | Upload multiple files on local disk to the bucket          | filePaths, options?                   | Promise\<string[]>                   |
 | `getStream()`               | Fetch a readable stream of a file                          | filePath, options?                    | Promise\<Readable>                   |
 | `downloadFile()`            | Download a file to memory                                  | filePath, options?                    | Promise\<Buffer \| string \| object> |
 | `downloadToDisk()`          | Download a file to the disk                                | filePath, outDir, options?            | Promise\<void>                       |
@@ -572,7 +572,7 @@ await fm.uploadFromDisk(
 ```
 
 **Arguments:**
-- `filePath` - The file path to be uploaded
+- `filePath` - The local file path to be uploaded
 - `options` *(optional)* - An object of type `UploadOptions`. May include:
     - `prefix` *(optional)* - Path to the folder (prefix) where the file should be added. If omitted, the file will be uploaded to the root of the storage bucket.
     - `spanOptions` *(optional)* - Tracing options (used only with `withSpan`; [learn more](#4-logging-and-tracing)).
@@ -580,6 +580,8 @@ await fm.uploadFromDisk(
 **Returns:**
 
 A promise resolving to a string containing the full path of the newly uploaded file.
+
+> This method reads a local file from disk and automatically constructs the appropriate file buffer or readable stream based on its size, preparing it for upload to the storage bucket.
 
 #### `uploadMultipleFromDisk()`
 ```ts
@@ -612,7 +614,7 @@ A promise resolving to an object of type `UploadFilesReturnType` with:
 - `filePaths` - An array of strings representing the complete file paths for each successfully uploaded file.
 - `skippedFiles` - An array containing the names of all files whose uploads failed.
 
-> If the upload of a particular file fails, the method will not throw an error. Instead, the names of all files that failed to upload are returned.
+> This method reads local files from disk and automatically constructs the appropriate file buffer or readable stream for each based on its size, preparing it for upload to the storage bucket. If the upload of a particular file fails, the method will not throw an error. Instead, the names of all files that failed to upload are returned.
 
 ### Download Methods
 #### `getStream()`
