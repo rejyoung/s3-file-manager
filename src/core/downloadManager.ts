@@ -8,17 +8,17 @@ import { S3FMContext } from "./context.js";
 import { Readable } from "stream";
 import { backoffDelay, wait } from "../utils/wait.js";
 import {
-    DownloadAllOptions,
-    DownloadLinkOptions,
+    DownloadFolderOptions,
+    GetDownloadUrlOptions,
     DownloadToDiskOptions,
-    FileStreamOptions,
-    LoadFileOptions,
+    GetStreamOptions,
+    DownloadFileOptions,
 } from "../types/input-types.js";
-import { fileTypeFromBuffer } from "file-type";
+import { fileTypeFromBuffer } from "s3-file-manager/file-type-wrapper";
 import isUtf8 from "is-utf8";
 import { createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
-import { writeFile } from "fs/promises";
+import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import {
     FileContentType,
@@ -27,7 +27,7 @@ import {
 } from "../types/internal-types.js";
 import { extension } from "mime-types";
 import Bottleneck from "bottleneck";
-import { DownloadAllReturnType } from "../types/return-types.js";
+import { DownloadFolderReturnType } from "../types/return-types.js";
 
 const TEXT_MIME_PREFIXES = ["text/", "application/xml"];
 const TEXT_EXTENSIONS = ["txt", "csv", "xml", "md", "html"];
@@ -52,14 +52,14 @@ export class DownloadManager {
     // 🚿 STREAM FILE FROM S3
     // Streams file data without loading it fully into memory
     // ════════════════════════════════════════════════════════════════
-    public async streamFile(
+    public async getStream(
         filePath: string,
-        options: FileStreamOptions = {}
+        options: GetStreamOptions = {}
     ): Promise<Readable> {
         const { spanOptions = {}, timeoutMS = 10000 } = options;
 
         const {
-            name: spanName = "S3FileManager.streamFile",
+            name: spanName = "S3FileManager.getStream",
             attributes: spanAttributes = {
                 bucket: this.ctx.bucketName,
                 filePath: filePath,
@@ -129,14 +129,14 @@ export class DownloadManager {
     // 📄 LOAD FILE CONTENTS
     // Loads a file's contents into memory as Buffer, text, or object
     // ════════════════════════════════════════════════════════════════
-    public async loadFile(
+    public async downloadFile(
         filePath: string,
-        options: LoadFileOptions = {}
+        options: DownloadFileOptions = {}
     ): Promise<string | Buffer | object> {
         const { spanOptions = {} } = options;
 
         const {
-            name: spanName = "S3FileManager.loadFile",
+            name: spanName = "S3FileManager.downloadFile",
             attributes: spanAttributes = {
                 bucket: this.ctx.bucketName,
                 filePath: filePath,
@@ -152,15 +152,13 @@ export class DownloadManager {
                     try {
                         attempt++;
 
-                        const stream: Readable = await this.streamFile(
-                            filePath
-                        );
+                        const stream: Readable = await this.getStream(filePath);
                         const fileBuffer: Buffer =
                             await this.ctx.streamToBuffer(stream, "Readable");
 
                         const fileFormat = await this.getFileFormat({
                             filePath,
-                            callerName: "S3FileManager.loadFile",
+                            callerName: "S3FileManager.downloadFile",
                         });
                         const returnType = fileFormat.fileType;
 
@@ -194,7 +192,7 @@ export class DownloadManager {
     public async downloadToDisk(
         filePath: string,
         outDir: string,
-        options: DownloadToDiskOptions
+        options: DownloadToDiskOptions = {}
     ): Promise<void> {
         const { spanOptions = {}, outputFilename } = options;
 
@@ -218,7 +216,7 @@ export class DownloadManager {
             );
             const originalFileName = path.parse(filePath).name;
 
-            const stream: Readable = await this.streamFile(filePath);
+            const stream: Readable = await this.getStream(filePath);
 
             let fileBuffer: Buffer | undefined;
             if (
@@ -245,6 +243,8 @@ export class DownloadManager {
                 }
             }
 
+            await mkdir(outDir, { recursive: true });
+
             if (fileBuffer) {
                 await writeFile(destinationPath, fileBuffer);
             } else {
@@ -259,16 +259,16 @@ export class DownloadManager {
     // 📦 BULK DOWNLOAD TO DISK
     // Downloads all files with a given prefix to the local file system
     // ════════════════════════════════════════════════════════════════
-    public async downloadAllToDisk(
+    public async downloadFolderToDisk(
         prefix: string,
         outDir: string,
-        options: DownloadAllOptions
-    ): Promise<DownloadAllReturnType> {
+        options: DownloadFolderOptions = {}
+    ): Promise<DownloadFolderReturnType> {
         const { spanOptions = {} } = options;
         const failedToDownload: string[] = [];
 
         const {
-            name: spanName = "S3FileManager.downloadAllToDisk",
+            name: spanName = "S3FileManager.downloadFolderToDisk",
             attributes: spanAttributes = {
                 bucket: this.ctx.bucketName,
                 prefix,
@@ -279,10 +279,9 @@ export class DownloadManager {
             spanName,
             spanAttributes,
             async () => {
-                const filesToDownload = await this.ctx.listItems({
-                    prefix,
+                const filesToDownload = await this.ctx.listItems(prefix, {
                     spanOptions: {
-                        name: "S3FileManager.downloadAllToDisk > listItems",
+                        name: "S3FileManager.downloadFolderToDisk > listItems",
                         attributes: { bucket: this.ctx.bucketName, prefix },
                     },
                 });
@@ -296,17 +295,36 @@ export class DownloadManager {
                     };
                 }
 
+                // Construct final out directory (outPath) for all files (the input outDir plus the last folder from the prefix)
+                // If outDir = C:/myfolder and prefix = "sourcefolder/images"
+                // then outPath = C:/myfolder/images
+                const trimmedPrefix = prefix.replace(/\/+$/, ""); // Remove trailing slashes
+                const smallestFolder = path.basename(trimmedPrefix);
+                const outPath = path.join(outDir, smallestFolder);
+
                 await Promise.all(
                     filesToDownload.map(async (file) => {
+                        // Construct out directory (adjustedOutDir) for specific files to preserve internal file structure
+                        // by appending folders nested within the prefix to the out directory.
+                        //
+                        // If prefix = "sourcefolder" and outPath = C:/myfolder/images and file(key) = sourcefolder/images/animals/cats/cat.jpg
+                        // then adjustedOutDir = C:/myfolder/images/animals/cats/
+                        const relativeFolder = path.dirname(
+                            file.slice(trimmedPrefix.length + 1)
+                        );
+                        const adjustedOutDir = path.join(
+                            outPath,
+                            relativeFolder
+                        );
                         try {
                             await this.limiter.schedule(() =>
-                                this.downloadToDisk(file, outDir, {
+                                this.downloadToDisk(file, outPath, {
                                     spanOptions: {
-                                        name: "S3FileManager.downloadAllToDisk > downloadToDisk",
+                                        name: "S3FileManager.downloadFolderToDisk > downloadToDisk",
                                         attributes: {
                                             bucket: this.ctx.bucketName,
                                             filePath: file,
-                                            outDir,
+                                            outDir: adjustedOutDir,
                                         },
                                     },
                                 })
@@ -355,14 +373,14 @@ export class DownloadManager {
     // 🔗 GENERATE TEMPORARY SIGNED URL
     // Generates a presigned URL for temporary access to an S3 file
     // ════════════════════════════════════════════════════════════════
-    public async generateTempDownloadLink(
+    public async getTemporaryDownloadUrl(
         filePath: string,
-        options: DownloadLinkOptions
+        options: GetDownloadUrlOptions = {}
     ): Promise<string> {
         const { spanOptions = {}, expiresInSec = 60 * 60 } = options;
 
         const {
-            name: spanName = "S3FileManager.generateTempDownloadLink",
+            name: spanName = "S3FileManager.getTemporaryDownloadUrl",
             attributes: spanAttributes = {
                 bucket: this.ctx.bucketName,
                 filePath: filePath,
@@ -397,6 +415,7 @@ export class DownloadManager {
                             `to generate temporary download link for ${filePath}`,
                             error
                         );
+                        await wait(backoffDelay(attempt));
                     }
                 }
             }
@@ -438,6 +457,7 @@ export class DownloadManager {
                             `to get MIME type of file ${filePath}`,
                             error
                         );
+                        await wait(backoffDelay(attempt));
                     }
                 }
             }
