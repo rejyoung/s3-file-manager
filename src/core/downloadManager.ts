@@ -216,8 +216,7 @@ export class DownloadManager {
         } = spanOptions;
 
         // Normalize and correctly format outDir
-        const normalizedOutDir = path.normalize(outDir);
-        const formattedOutDir = path.join(normalizedOutDir, "");
+        const formattedOutDir = path.resolve(outDir) + path.sep;
 
         await this.ctx.withSpan(spanName, spanAttributes, async () => {
             const fileMetadata = await this.getFileMetadata(
@@ -253,11 +252,11 @@ export class DownloadManager {
                 }
             }
 
-            await mkdir(outDir, { recursive: true });
+            await mkdir(formattedOutDir, { recursive: true });
 
             if (fileBuffer) {
                 this.ctx.verboseLog(
-                    `Preparing to write file ${filePath} to ${outDir}`,
+                    `Preparing to write file ${filePath} to ${formattedOutDir}`,
                     "info"
                 );
                 await writeFile(destinationPath, fileBuffer);
@@ -330,13 +329,20 @@ export class DownloadManager {
                         //
                         // If prefix = "sourcefolder" and outPath = C:/myfolder/images and file(key) = sourcefolder/images/animals/cats/cat.jpg
                         // then adjustedOutDir = C:/myfolder/images/animals/cats/
-                        const relativeFolder = path.dirname(
-                            file.slice(trimmedPrefix.length + 1)
-                        );
+                        const relativeFolder =
+                            trimmedPrefix.length > 0
+                                ? path.dirname(
+                                      file.slice(trimmedPrefix.length + 1)
+                                  )
+                                : path.dirname(file);
+
+                        console.log("RELATIVE FOLDER:", relativeFolder);
                         const adjustedOutDir = path.join(
                             outPath,
                             relativeFolder
                         );
+
+                        console.log("ADJUSTED:", adjustedOutDir);
 
                         this.ctx.verboseLog(
                             `Starting download for ${file}`,
@@ -344,7 +350,7 @@ export class DownloadManager {
                         );
                         try {
                             await this.limiter.schedule(() =>
-                                this.downloadToDisk(file, outPath, {
+                                this.downloadToDisk(file, adjustedOutDir, {
                                     spanOptions: {
                                         name: "S3FileManager.downloadFolderToDisk > downloadToDisk",
                                         attributes: {
@@ -373,21 +379,33 @@ export class DownloadManager {
                 if (failedToDownload.length === 0) {
                     return {
                         success: true,
-                        message: `All files with prefix ${prefix} successfully downloaded`,
+                        message: `All files ${
+                            prefix.length > 0
+                                ? `with prefix ${prefix}`
+                                : "in root folder"
+                        } successfully downloaded`,
                         downloadedFiles: filesToDownload.length,
                         failedToDownload,
                     };
                 } else if (failedToDownload.length === filesToDownload.length) {
                     return {
                         success: false,
-                        message: `All files with prefix ${prefix} failed to download. For details, enable verbose logging.`,
+                        message: `All files ${
+                            prefix.length > 0
+                                ? `with prefix ${prefix}`
+                                : "in root folder"
+                        } failed to download. For details, enable verbose logging.`,
                         downloadedFiles: 0,
                         failedToDownload,
                     };
                 } else {
                     return {
                         success: true,
-                        message: `Some files with prefix ${prefix} failed to download. For details, enable verbose logging.`,
+                        message: `Some files ${
+                            prefix.length > 0
+                                ? `with prefix ${prefix}`
+                                : "in root folder"
+                        } failed to download. For details, enable verbose logging.`,
                         downloadedFiles:
                             filesToDownload.length - failedToDownload.length,
                         failedToDownload,

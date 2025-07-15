@@ -131,7 +131,7 @@ export class UploadManager {
         files: FilePayload[],
         options: UploadOptions = {}
     ): Promise<UploadFilesReturnType> {
-        // Limiter to prevent race conditions when pushing to skippedFiles and filePaths arrays.
+        // Limiter to prevent race conditions when pushing to skippedFiles array.
         const mutex = new Bottleneck({ maxConcurrent: 1 });
 
         const { spanOptions = {}, prefix } = options;
@@ -147,7 +147,7 @@ export class UploadManager {
         let filePaths: string[] = [];
 
         await this.ctx.withSpan(spanName, spanAttributes, async () => {
-            await Promise.all(
+            const results = await Promise.all(
                 files.map(async (file) => {
                     try {
                         this.ctx.verboseLog(
@@ -155,33 +155,33 @@ export class UploadManager {
                             "info"
                         );
                         const result = await this.uploadFile(file, { prefix });
-                        await mutex.schedule(async () => {
-                            filePaths.push(result);
-                        });
+
                         this.ctx.verboseLog(
                             `Successfully uploaded file: ${file.name}`,
                             "info"
                         );
+                        return result;
                     } catch (error) {
-                        await mutex.schedule(async () =>
-                            skippedFiles.push(file.name)
-                        );
+                        await mutex.schedule(async () => {
+                            skippedFiles.push(file.name);
+                        });
                         this.ctx.verboseLog(String(error), "warn");
                         this.ctx.verboseLog("Skipping file...", "warn");
                     }
                 })
             );
+            filePaths = results.filter(Boolean) as string[];
         });
 
         if (skippedFiles.length > 0) {
             this.ctx.logger.warn(
-                `File batch upload finished, but the following ${
+                `Upload multiple files finished, but the following ${
                     skippedFiles.length
                 } file(s) failed to upload: ${skippedFiles.join(", ")}`
             );
         } else {
             this.ctx.logger.info(
-                "File batch upload complete. All files successfully uploaded."
+                "Upload multiple files complete. All files successfully uploaded."
             );
         }
 
@@ -511,6 +511,10 @@ export class UploadManager {
         while (true) {
             try {
                 attempt++;
+
+                this.ctx.verboseLog(
+                    `Uploading part ${partNumber} of ${filename}`
+                );
                 const uploadPartResponse = await this.ctx.withSpan(
                     "S3FileManager.uploadFile > multipartUpload > uploadPartWithRetry",
                     { filename, uploadId, partNumber },
@@ -526,6 +530,9 @@ export class UploadManager {
                                 })
                             )
                         )
+                );
+                this.ctx.verboseLog(
+                    `Part ${partNumber} of ${filename} successfully uploaded.`
                 );
                 return uploadPartResponse.ETag!;
             } catch (error) {
