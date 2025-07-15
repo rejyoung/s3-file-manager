@@ -91,7 +91,6 @@ export class S3FMContext {
         const params = {
             Bucket: this.bucketName,
             Prefix: prefix ? formatPrefix("", prefix) : undefined,
-            Delimiter: directoriesOnly ? "/" : undefined,
         };
 
         const result = await this.withSpan(
@@ -117,14 +116,7 @@ export class S3FMContext {
                             attempt++;
                             const command = new ListObjectsV2Command(params);
                             response = await this.s3.send(command);
-                            this.verboseLog(
-                                `Fetched ${
-                                    directoriesOnly
-                                        ? response.CommonPrefixes?.length ?? 0
-                                        : response.Contents?.length ?? 0
-                                } item(s) in this page`,
-                                "info"
-                            );
+                            this.verboseLog(`Retrieved`);
                             break;
                         } catch (error) {
                             this.handleRetryErrorLogging(
@@ -141,14 +133,25 @@ export class S3FMContext {
                     }
                     let items: string[];
                     if (directoriesOnly) {
-                        items =
-                            response.CommonPrefixes?.map((p) => p.Prefix || "")
-                                .filter(Boolean)
-                                .filter(filterFn) || [];
+                        this.verboseLog(
+                            "Constructing folder names from file paths"
+                        );
+                        const folders: Set<string> = new Set();
+                        const keys = response.Contents?.map(
+                            (file) => file.Key || ""
+                        ).filter(Boolean);
+                        for (const key of keys ?? []) {
+                            const parts = key.split("/").slice(0, -1);
+                            for (let i = 1; i <= parts.length; i++) {
+                                folders.add(parts.slice(0, i).join("/") + "/");
+                            }
+                        }
+                        items = Array.from(folders).filter(filterFn);
                     } else {
                         items =
                             response.Contents?.map((file) => file.Key || "")
                                 .filter(Boolean)
+                                .filter((key) => !key.endsWith("/"))
                                 .filter(filterFn) || [];
                     }
 
@@ -163,7 +166,10 @@ export class S3FMContext {
                     (params as any).ContinuationToken = continuationToken;
                 } while (continuationToken);
 
-                const sortedItems = filteredItems.sort(compareFn);
+                // If listing directories only, convert filteredItems to a set and back to an array to eliminate any potential duplicates
+                const sortedItems = directoriesOnly
+                    ? Array.from(new Set(filteredItems)).sort(compareFn)
+                    : filteredItems.sort(compareFn);
 
                 this.verboseLog(
                     `Successfully retrieved ${sortedItems.length} ${
