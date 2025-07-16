@@ -1,6 +1,6 @@
 {
     "name": "s3-file-manager",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "description": "A streamlined, high-level S3 client for Node.js with built-in retries and support for uploads, downloads, and file operations — works with any S3-compatible storage.",
     "repository": {
         "type": "git",
