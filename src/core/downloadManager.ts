@@ -336,13 +336,10 @@ export class DownloadManager {
                                   )
                                 : path.dirname(file);
 
-                        console.log("RELATIVE FOLDER:", relativeFolder);
                         const adjustedOutDir = path.join(
                             outPath,
                             relativeFolder
                         );
-
-                        console.log("ADJUSTED:", adjustedOutDir);
 
                         this.ctx.verboseLog(
                             `Starting download for ${file}`,
