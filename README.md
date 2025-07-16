@@ -16,7 +16,8 @@
 - [4. Logging and Tracing](#logging-and-tracing)
     - [Logger](#logger)
     - [Tracing Function (withSpan)](#tracing-function-withspan)
-- [5. Automatic Retries and Error Handling](##automatic-retries-and-error-handling)
+- [5. Automatic Retries and Error Handling](#automatic-retries-and-error-handling)
+- [6. Running Tests](#6-running-tests)
 
 
 ## 1. Getting Started
@@ -835,3 +836,14 @@ Single-file operations (e.g. `uploadFile`, `renameFile`) will throw an error if 
 If verbose logging is enabled, the library will emit a warning with full error details on each failed attempt—except the final attempt of single-file operations, where an error is thrown instead of a warning.
 
 All warnings are routed through the configured logger—either a [custom logging utility](#4-logging-and-tracing) provided via the logger config parameter, or the default console.warn if none is supplied.
+
+## 6. Running Tests
+This project uses [Vitest](https://vitest.dev) for testing.
+
+To run the tests:
+
+```bash
+npm test
+```
+
+> 🧪 Note: All tests are fully mocked using Vitest. No actual connection is made to an S3 service, so running the tests does not require AWS credentials or an internet connection.
