@@ -1,5 +1,7 @@
 
-# S3-file-manager
+# s3-file-manager
+
+[![NPM version](https://img.shields.io/npm/v/s3-file-manager.svg?style=flat)](https://www.npmjs.com/package/s3-file-manager) [![NPM monthly downloads](https://img.shields.io/npm/dm/s3-file-manager.svg?style=flat)](https://www.npmjs.com/package/s3-file-manager) [![NPM total downloads](https://img.shields.io/npm/dt/s3-file-manager.svg?style=flat)](https://www.npmjs.com/package/s3-file-manager)
 
 ## Table of Contents
 
