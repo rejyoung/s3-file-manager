@@ -1,6 +1,6 @@
 {
     "name": "s3-file-manager",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "A streamlined, high-level S3 client for Node.js with built-in retries and support for uploads, downloads, and file operations — works with any S3-compatible storage.",
     "engines": {
         "node": ">=18.0.0"
@@ -66,15 +66,15 @@
     "devDependencies": {
         "@types/is-utf8": "^0.2.3",
         "@types/mime-types": "^3.0.1",
-        "@types/node": "^24.0.10",
+        "@types/node": "^24.0.14",
         "aws-sdk-client-mock": "^4.1.0",
         "ts-node": "^10.9.2",
         "typescript": "^5.8.3",
         "vitest": "^3.2.4"
     },
     "dependencies": {
-        "@aws-sdk/client-s3": "^3.842.0",
-        "@aws-sdk/s3-request-presigner": "^3.842.0",
+        "@aws-sdk/client-s3": "^3.846.0",
+        "@aws-sdk/s3-request-presigner": "^3.846.0",
         "bottleneck": "^2.19.5",
         "file-type": "^21.0.0",
         "is-utf8": "^0.2.1",
